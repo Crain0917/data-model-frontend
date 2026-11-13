@@ -1,0 +1,18 @@
+Re-optimizing dependencies because lockfile has changed
+
+  [32m[1mVITE[22m v5.4.21[39m  [2mready in [0m[1m889[22m[2m[0m ms[22m
+
+  [32m➜[39m  [1mLocal[22m:   [36mhttp://localhost:[1m5175[22m/[39m
+  [32m➜[39m  [1mNetwork[22m: [36mhttp://192.168.18.1:[1m5175[22m/[39m
+  [32m➜[39m  [1mNetwork[22m: [36mhttp://192.168.10.1:[1m5175[22m/[39m
+  [32m➜[39m  [1mNetwork[22m: [36mhttp://10.100.98.174:[1m5175[22m/[39m
+[2m13:17:21[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/DataSource/DataSourceDrawer.tsx[22m
+[2m13:17:21[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/DataSource/DataSourceDrawer.tsx[22m
+[2m13:17:23[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/DataSource/index.tsx[22m
+[2m13:17:26[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/DataSource/index.tsx[22m
+[2m13:19:41[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/FlowEditor/index.tsx, /src/pages/FlowEditor/Canvas.tsx, /src/pages/FlowEditor/ConfigDrawer.tsx[22m
+[2m13:19:41[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/FlowEditor/index.tsx, /src/pages/FlowEditor/Canvas.tsx, /src/pages/FlowEditor/ConfigDrawer.tsx[22m
+[2m13:19:44[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/FlowList/index.tsx, /src/pages/Logs/index.tsx, /src/pages/FlowEditor/index.tsx, /src/pages/FlowEditor/Canvas.tsx, /src/pages/FlowEditor/ConfigDrawer.tsx[22m
+[2m13:19:45[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/FlowList/index.tsx, /src/pages/Logs/index.tsx, /src/pages/FlowEditor/index.tsx, /src/pages/FlowEditor/Canvas.tsx, /src/pages/FlowEditor/ConfigDrawer.tsx[22m
+[2m13:19:49[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/FlowList/index.tsx, /src/pages/Logs/index.tsx, /src/pages/FlowEditor/index.tsx, /src/pages/FlowEditor/Canvas.tsx, /src/pages/FlowEditor/ConfigDrawer.tsx[22m
+[2m13:19:52[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/FlowList/index.tsx, /src/pages/Logs/index.tsx, /src/pages/FlowEditor/index.tsx, /src/pages/FlowEditor/Canvas.tsx, /src/pages/FlowEditor/ConfigDrawer.tsx[22m

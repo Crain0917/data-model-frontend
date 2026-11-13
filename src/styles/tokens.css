@@ -1,0 +1,105 @@
+/* Astryx design tokens — light / dark */
+:root {
+  --color-primary: #4f6bff;
+  --color-primary-strong: #3b57ee;
+  --color-primary-soft: #eef2ff;
+  --color-primary-softer: #f5f7ff;
+  --color-on-primary: #ffffff;
+
+  --bg-app: #f7f8fc;
+  --bg-elevated: #ffffff;
+  --bg-subtle: #f3f5fa;
+  --bg-inset: #eef1f7;
+  --bg-canvas: #f9fafd;
+
+  --text-primary: #1f2333;
+  --text-secondary: #6b7280;
+  --text-tertiary: #9ca3af;
+  --text-inverse: #ffffff;
+
+  --border: #e6e8f0;
+  --border-strong: #d7dbe7;
+  --border-focus: #4f6bff;
+
+  --success: #16a34a;
+  --success-soft: #ecfdf3;
+  --danger: #dc2626;
+  --danger-soft: #fef2f2;
+  --warning: #d97706;
+  --warning-soft: #fff7e6;
+  --info: #2563eb;
+  --info-soft: #eff6ff;
+
+  --node-source: #e8f0fe;
+  --node-filter: #fff3e0;
+  --node-group: #e6f7ee;
+  --node-join: #f3e8ff;
+  --node-union: #e0f7fa;
+  --node-sink: #e6f7ee;
+
+  --radius-card: 14px;
+  --radius-control: 8px;
+  --radius-pill: 999px;
+
+  --shadow-card: 0 4px 16px rgba(31, 35, 51, 0.06);
+  --shadow-float: 0 12px 32px rgba(31, 35, 51, 0.14);
+  --shadow-focus: 0 0 0 2px #4f6bff, 0 0 16px rgba(79, 107, 255, 0.45);
+
+  --font-sans: "Inter", "PingFang SC", "Microsoft YaHei", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+
+  --sidebar-bg: #ffffff;
+  --sidebar-active: #eef2ff;
+  --dot-color: #dfe3ee;
+
+  color-scheme: light;
+}
+
+html[data-theme='dark'] {
+  --color-primary: #7c90ff;
+  --color-primary-strong: #9aa9ff;
+  --color-primary-soft: rgba(94, 118, 255, 0.18);
+  --color-primary-softer: rgba(94, 118, 255, 0.09);
+  --color-on-primary: #0d1020;
+
+  --bg-app: #0e1120;
+  --bg-elevated: #171b2e;
+  --bg-subtle: #1d2237;
+  --bg-inset: #232941;
+  --bg-canvas: #121525;
+
+  --text-primary: #f1f3fb;
+  --text-secondary: #a7aec4;
+  --text-tertiary: #737b93;
+  --text-inverse: #0e1120;
+
+  --border: #2a3048;
+  --border-strong: #363d59;
+  --border-focus: #7c90ff;
+
+  --success: #34d399;
+  --success-soft: rgba(52, 211, 153, 0.14);
+  --danger: #f87171;
+  --danger-soft: rgba(248, 113, 113, 0.14);
+  --warning: #fbbf24;
+  --warning-soft: rgba(251, 191, 36, 0.14);
+  --info: #60a5fa;
+  --info-soft: rgba(96, 165, 250, 0.14);
+
+  --node-source: #1c2a4d;
+  --node-filter: #3a2c17;
+  --node-group: #17352a;
+  --node-join: #2f1f45;
+  --node-union: #12343a;
+  --node-sink: #17352a;
+
+  --shadow-card: 0 4px 18px rgba(0, 0, 0, 0.35);
+  --shadow-float: 0 16px 40px rgba(0, 0, 0, 0.5);
+  --shadow-focus: 0 0 0 2px #7c90ff, 0 0 18px rgba(124, 144, 255, 0.45);
+
+  --sidebar-bg: #14182a;
+  --sidebar-active: rgba(94, 118, 255, 0.18);
+  --dot-color: #2b334d;
+
+  color-scheme: dark;
+}

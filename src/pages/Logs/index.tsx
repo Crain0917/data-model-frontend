@@ -1,0 +1,408 @@
+import { useEffect, useMemo, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { App, Button, Select, Skeleton, Tooltip } from 'antd';
+import {
+  CalendarOutlined,
+  CheckCircleFilled,
+  CloseCircleFilled,
+  ClockCircleOutlined,
+  CopyOutlined,
+  LeftOutlined,
+  MinusCircleFilled,
+  PlayCircleOutlined,
+  ReloadOutlined,
+  RightOutlined,
+  SyncOutlined,
+} from '@ant-design/icons';
+import dayjs, { type Dayjs } from 'dayjs';
+import type { FlowRun, FlowSummary, NodeRun, RunStatus } from '../../types';
+import { listFlows, listRuns } from '../../api/flow';
+import { StatusTag } from '../../components/StatusTag';
+import EmptyState from '../../components/EmptyState';
+
+const WEEK_LABELS = ['一', '二', '三', '四', '五', '六', '日'];
+
+function statusIcon(status: RunStatus, size = 13) {
+  if (status === 'SUCCESS') return <CheckCircleFilled style={{ color: 'var(--success)', fontSize: size }} />;
+  if (status === 'FAILED') return <CloseCircleFilled style={{ color: 'var(--danger)', fontSize: size }} />;
+  if (status === 'RUNNING') return <SyncOutlined spin style={{ color: 'var(--info)', fontSize: size }} />;
+  if (status === 'SKIPPED') return <MinusCircleFilled style={{ color: 'var(--text-tertiary)', fontSize: size }} />;
+  return <ClockCircleOutlined style={{ color: 'var(--text-tertiary)', fontSize: size }} />;
+}
+
+function durationText(ms?: number | null) {
+  if (ms == null) return '—';
+  if (ms < 1000) return `${ms} ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)} s`;
+  return `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`;
+}
+
+function monthCells(month: Dayjs): Array<{ date: Dayjs; inMonth: boolean }> {
+  const first = month.startOf('month');
+  const offset = (first.day() + 6) % 7;
+  const start = first.subtract(offset, 'day');
+  return Array.from({ length: 42 }, (_, i) => {
+    const date = start.add(i, 'day');
+    return { date, inMonth: date.month() === month.month() };
+  });
+}
+
+export default function LogsPage() {
+  const navigate = useNavigate();
+  const { message } = App.useApp();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const flowFilter = searchParams.get('flowId') || 'all';
+
+  const [flows, setFlows] = useState<FlowSummary[]>([]);
+  const [runs, setRuns] = useState<FlowRun[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [month, setMonth] = useState<Dayjs>(dayjs());
+  const [selectedDate, setSelectedDate] = useState(dayjs().format('YYYY-MM-DD'));
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    Promise.all([listFlows(), listRuns()])
+      .then(([f, r]) => {
+        if (!alive) return;
+        setFlows(f);
+        setRuns(r);
+        if (r.length) {
+          const scoped = flowFilter === 'all' ? r : r.filter((x) => x.flowId === flowFilter);
+          const latest = scoped[0] || r[0];
+          setSelectedDate(latest.startTime.slice(0, 10));
+          setMonth(dayjs(latest.startTime));
+          setSelectedRunId(latest.id);
+        }
+      })
+      .catch((e) => message.error((e as Error).message || '日志加载失败'))
+      .finally(() => alive && setLoading(false));
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const scopedRuns = useMemo(
+    () => (flowFilter === 'all' ? runs : runs.filter((r) => r.flowId === flowFilter)),
+    [runs, flowFilter],
+  );
+
+  const runsByDate = useMemo(() => {
+    const map = new Map<string, FlowRun[]>();
+    scopedRuns.forEach((r) => {
+      const key = r.startTime.slice(0, 10);
+      const arr = map.get(key) || [];
+      arr.push(r);
+      map.set(key, arr);
+    });
+    return map;
+  }, [scopedRuns]);
+
+  const dayRuns = runsByDate.get(selectedDate) || [];
+  const selectedRun = runs.find((r) => r.id === selectedRunId) || dayRuns[0] || null;
+  const selectedNode: NodeRun | null =
+    selectedRun?.nodes.find((n) => n.nodeId === selectedNodeId) ||
+    selectedRun?.nodes.find((n) => n.status === 'FAILED') ||
+    selectedRun?.nodes[0] ||
+    null;
+
+  useEffect(() => {
+    if (selectedRun) {
+      const first = selectedRun.nodes.find((n) => n.status === 'FAILED') || selectedRun.nodes[0];
+      setSelectedNodeId(first?.nodeId || null);
+    }
+  }, [selectedRunId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const cells = useMemo(() => monthCells(month), [month]);
+
+  const setFlowFilter = (value: string) => {
+    if (value === 'all') {
+      searchParams.delete('flowId');
+      setSearchParams(searchParams, { replace: true });
+    } else {
+      searchParams.set('flowId', value);
+      setSearchParams(searchParams, { replace: true });
+    }
+    const next = value === 'all' ? runs : runs.filter((r) => r.flowId === value);
+    if (next.length) {
+      setSelectedDate(next[0].startTime.slice(0, 10));
+      setMonth(dayjs(next[0].startTime));
+      setSelectedRunId(next[0].id);
+    } else {
+      setSelectedRunId(null);
+    }
+  };
+
+  const pickDate = (date: Dayjs) => {
+    setSelectedDate(date.format('YYYY-MM-DD'));
+    const list = runsByDate.get(date.format('YYYY-MM-DD'));
+    setSelectedRunId(list?.[0]?.id || null);
+  };
+
+  const copySql = async () => {
+    if (!selectedNode?.sql) return;
+    try {
+      await navigator.clipboard.writeText(selectedNode.sql);
+      message.success('SQL 已复制');
+    } catch {
+      message.error('复制失败，请手动选择文本');
+    }
+  };
+
+  const today = dayjs().format('YYYY-MM-DD');
+  const monthSuccess = scopedRuns.filter(
+    (r) => r.status === 'SUCCESS' && dayjs(r.startTime).isSame(month, 'month'),
+  ).length;
+  const monthFailed = scopedRuns.filter(
+    (r) => r.status === 'FAILED' && dayjs(r.startTime).isSame(month, 'month'),
+  ).length;
+
+  return (
+    <div className="page">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">任务日志</h1>
+          <p className="page-subtitle">按日期查看每次执行的状态、节点耗时与错误堆栈，快速定位失败节点。</p>
+        </div>
+        <div className="page-actions">
+          <Select
+            value={flowFilter}
+            style={{ width: 220 }}
+            onChange={setFlowFilter}
+            options={[{ value: 'all', label: '全部任务' }, ...flows.map((f) => ({ value: f.id, label: f.name }))]}
+          />
+          <Button
+            icon={<ReloadOutlined />}
+            onClick={() => {
+              setLoading(true);
+              listRuns()
+                .then(setRuns)
+                .catch((e) => message.error((e as Error).message))
+                .finally(() => setLoading(false));
+            }}
+          >
+            刷新
+          </Button>
+        </div>
+      </div>
+
+      <div className="logs-layout">
+        <section className="card logs-calendar">
+          <div className="logs-calendar-head">
+            <div>
+              <div className="logs-calendar-month">{month.format('YYYY 年 M 月')}</div>
+              <div className="logs-calendar-sub">
+                成功 {monthSuccess} · 失败 {monthFailed}
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 2 }}>
+              <Button type="text" size="small" icon={<LeftOutlined />} onClick={() => setMonth(month.subtract(1, 'month'))} />
+              <Button type="text" size="small" onClick={() => { setMonth(dayjs()); pickDate(dayjs()); }}>
+                今天
+              </Button>
+              <Button type="text" size="small" icon={<RightOutlined />} onClick={() => setMonth(month.add(1, 'month'))} />
+            </div>
+          </div>
+          <div className="logs-week">
+            {WEEK_LABELS.map((w) => (
+              <span key={w}>{w}</span>
+            ))}
+          </div>
+          <div className="logs-grid">
+            {cells.map(({ date, inMonth }) => {
+              const key = date.format('YYYY-MM-DD');
+              const list = runsByDate.get(key) || [];
+              const hasFailed = list.some((r) => r.status === 'FAILED');
+              const hasSuccess = list.some((r) => r.status === 'SUCCESS');
+              const hasRunning = list.some((r) => r.status === 'RUNNING');
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  className={[
+                    'logs-day',
+                    inMonth ? '' : 'is-out',
+                    key === selectedDate ? 'is-selected' : '',
+                    key === today ? 'is-today' : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' ')}
+                  onClick={() => pickDate(date)}
+                >
+                  <span className="logs-day-num">{date.date()}</span>
+                  <span className="logs-day-dots">
+                    {hasFailed ? <i className="dot dot--danger" /> : null}
+                    {hasRunning ? <i className="dot dot--info" /> : null}
+                    {hasSuccess ? <i className="dot dot--success" /> : null}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="logs-legend">
+            <span><i className="dot dot--success" /> 成功</span>
+            <span><i className="dot dot--danger" /> 失败</span>
+            <span><i className="dot dot--info" /> 运行中</span>
+          </div>
+        </section>
+
+        <section className="card logs-runs">
+          <div className="logs-section-head">
+            <div>
+              <div className="logs-section-title">{dayjs(selectedDate).format('M 月 D 日')} 执行记录</div>
+              <div className="logs-section-sub">{dayRuns.length ? `共 ${dayRuns.length} 次执行` : '当天没有执行记录'}</div>
+            </div>
+            <CalendarOutlined style={{ color: 'var(--text-tertiary)' }} />
+          </div>
+          <div className="logs-run-scroll">
+            {loading ? (
+              <Skeleton active paragraph={{ rows: 8 }} title={false} />
+            ) : dayRuns.length === 0 ? (
+              <div className="col-empty">当天暂无执行记录</div>
+            ) : (
+              dayRuns.map((run) => (
+                <button
+                  key={run.id}
+                  type="button"
+                  className={`log-run-card${selectedRun?.id === run.id ? ' is-active' : ''}`}
+                  onClick={() => {
+                    setSelectedRunId(run.id);
+                    setSelectedNodeId(null);
+                  }}
+                >
+                  <div className="log-run-top">
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                      {statusIcon(run.status)}
+                      <b>{run.flowName}</b>
+                    </span>
+                    <StatusTag status={run.status} />
+                  </div>
+                  <div className="log-run-meta">
+                    <span>{run.startTime.slice(11, 19)}</span>
+                    <span>{durationText(run.durationMs)}</span>
+                    <span>{run.nodes.length} 个节点</span>
+                    <span className="mini-tag">{run.trigger === 'MANUAL' ? '手动' : run.trigger === 'RETRY' ? '重试' : '调度'}</span>
+                  </div>
+                </button>
+              ))
+            )}
+          </div>
+        </section>
+
+        <section className="card logs-detail">
+          {!selectedRun ? (
+            <EmptyState
+              icon={<CalendarOutlined />}
+              title="选择一条执行记录"
+              text="在左侧选择日期与执行批次，这里会展示节点级日志、SQL 与错误堆栈。"
+            />
+          ) : (
+            <>
+              <div className="logs-section-head">
+                <div>
+                  <div className="logs-section-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    {statusIcon(selectedRun.status, 15)}
+                    {selectedRun.flowName}
+                    <StatusTag status={selectedRun.status} />
+                  </div>
+                  <div className="logs-section-sub mono">{selectedRun.id}</div>
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <Button size="small" icon={<PlayCircleOutlined />} onClick={() => navigate(`/flow/${selectedRun.flowId}/editor`)}>
+                    打开编排
+                  </Button>
+                </div>
+              </div>
+
+              <div className="logs-meta-grid">
+                <div><span>开始时间</span><b>{selectedRun.startTime}</b></div>
+                <div><span>结束时间</span><b>{selectedRun.endTime || '—'}</b></div>
+                <div><span>总耗时</span><b>{durationText(selectedRun.durationMs)}</b></div>
+                <div><span>触发方式</span><b>{selectedRun.trigger === 'MANUAL' ? '手动触发' : selectedRun.trigger === 'RETRY' ? '失败重试' : '定时调度'}</b></div>
+              </div>
+
+              <div className="logs-detail-body">
+                <div className="logs-node-list">
+                  {selectedRun.nodes.length === 0 ? (
+                    <div className="col-empty">该次执行没有节点明细</div>
+                  ) : (
+                    selectedRun.nodes.map((node) => (
+                      <button
+                        key={node.nodeId}
+                        type="button"
+                        className={`log-node-row${selectedNode?.nodeId === node.nodeId ? ' is-active' : ''}`}
+                        onClick={() => setSelectedNodeId(node.nodeId)}
+                      >
+                        <span className="log-node-line" />
+                        {statusIcon(node.status, 14)}
+                        <span className="log-node-name" title={node.nodeName}>{node.nodeName}</span>
+                        <span className="log-node-num">{node.rows == null ? '—' : `${node.rows.toLocaleString()} 行`}</span>
+                        <span className="log-node-num">{durationText(node.durationMs)}</span>
+                      </button>
+                    ))
+                  )}
+                </div>
+
+                <div className="logs-node-detail">
+                  {!selectedNode ? (
+                    <div className="col-empty">选择左侧节点查看明细</div>
+                  ) : (
+                    <>
+                      <div className="logs-node-head">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          {statusIcon(selectedNode.status)}
+                          <b>{selectedNode.nodeName}</b>
+                          <span className="mini-tag">{selectedNode.nodeId}</span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <Button
+                            size="small"
+                            icon={<PlayCircleOutlined />}
+                            disabled={selectedNode.status === 'SKIPPED'}
+                            onClick={() => message.success(`已提交节点重跑（模拟）：${selectedNode.nodeName}`)}
+                          >
+                            重跑该节点
+                          </Button>
+                        </div>
+                      </div>
+
+                      <div className="logs-block-title">
+                        <span>执行 SQL</span>
+                        <Tooltip title="复制 SQL">
+                          <Button type="text" size="small" icon={<CopyOutlined />} onClick={copySql} disabled={!selectedNode.sql} />
+                        </Tooltip>
+                      </div>
+                      <pre className="sql-block">{selectedNode.sql || '-- 该节点没有生成 SQL'}</pre>
+
+                      {selectedNode.errorStack ? (
+                        <>
+                          <div className="logs-block-title" style={{ color: 'var(--danger)' }}>
+                            <span>错误堆栈</span>
+                          </div>
+                          <pre className="sql-block error-block">{selectedNode.errorStack}</pre>
+                        </>
+                      ) : null}
+
+                      <div className="logs-block-title">
+                        <span>运行日志</span>
+                      </div>
+                      <div className="log-lines">
+                        {selectedNode.logs.map((line, i) => (
+                          <div key={`${line}-${i}`} className="log-line">
+                            {line}
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+        </section>
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,139 @@
+{
+  "nodes": [
+    {
+      "id": "node_1",
+      "type": "source",
+      "position": { "x": 60, "y": 140 },
+      "data": {
+        "label": "orders",
+        "color": "#E8F0FE",
+        "config": {
+          "dataSourceId": 1,
+          "tableName": "orders",
+          "fields": [
+            { "name": "order_id", "type": "BIGINT" },
+            { "name": "user_id", "type": "BIGINT" },
+            { "name": "amt", "type": "DOUBLE" },
+            { "name": "status", "type": "VARCHAR(32)" },
+            { "name": "city", "type": "VARCHAR(64)" },
+            { "name": "org_code", "type": "VARCHAR(32)" },
+            { "name": "ts", "type": "DATETIME" },
+            { "name": "remark", "type": "VARCHAR(255)" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "node_2",
+      "type": "source",
+      "position": { "x": 60, "y": 350 },
+      "data": {
+        "label": "users",
+        "color": "#E8F0FE",
+        "config": {
+          "dataSourceId": 1,
+          "tableName": "users",
+          "fields": [
+            { "name": "user_id", "type": "BIGINT" },
+            { "name": "cust_name", "type": "VARCHAR(128)" },
+            { "name": "city", "type": "VARCHAR(64)" },
+            { "name": "level", "type": "INT" },
+            { "name": "register_ts", "type": "DATETIME" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "node_3",
+      "type": "filter",
+      "position": { "x": 260, "y": 120 },
+      "data": {
+        "label": "filter_paid",
+        "color": "#FFF3E0",
+        "config": {
+          "alias": "a",
+          "passthrough": false,
+          "select": [
+            { "field": "order_id", "alias": "order_id", "keep": true, "sort": null },
+            { "field": "user_id", "alias": "user_id", "keep": true, "sort": null },
+            { "field": "amt", "alias": "amt", "keep": true, "sort": "DESC" },
+            { "field": "city", "alias": "city", "keep": true, "sort": null },
+            { "field": "status", "alias": "status", "keep": false, "sort": null },
+            { "field": "ts", "alias": "ts", "keep": true, "sort": null }
+          ],
+          "conditions": [
+            { "logic": "AND", "indent": 0, "left": "amt", "op": "GT", "rightType": "CONST", "right": "100", "right2": null },
+            { "logic": "AND", "indent": 0, "left": "status", "op": "EQ", "rightType": "CONST", "right": "PAID", "right2": null }
+          ],
+          "distinct": false,
+          "limit": 5000,
+          "offset": 0
+        }
+      }
+    },
+    {
+      "id": "node_4",
+      "type": "join",
+      "position": { "x": 450, "y": 235 },
+      "data": {
+        "label": "join_user",
+        "color": "#F3E8FF",
+        "config": {
+          "leftAlias": "a",
+          "rightAlias": "b",
+          "joinType": "LEFT",
+          "keys": [{ "left": "user_id", "right": "user_id" }],
+          "extraOn": [],
+          "projection": [
+            { "side": "a", "field": "order_id", "alias": "oid", "keep": true },
+            { "side": "a", "field": "amt", "alias": "a_amt", "keep": true },
+            { "side": "a", "field": "city", "alias": "city", "keep": true },
+            { "side": "b", "field": "cust_name", "alias": "cust", "keep": true },
+            { "side": "b", "field": "level", "alias": "level", "keep": true }
+          ],
+          "autoPrefix": true
+        }
+      }
+    },
+    {
+      "id": "node_5",
+      "type": "groupby",
+      "position": { "x": 640, "y": 235 },
+      "data": {
+        "label": "gb_city",
+        "color": "#E6F7EE",
+        "config": {
+          "alias": "a",
+          "globalAgg": false,
+          "groupBy": [{ "field": "city", "alias": "city" }],
+          "aggregates": [
+            { "field": "a_amt", "fn": "SUM", "alias": "sum_amt" },
+            { "field": "oid", "fn": "COUNT", "alias": "cnt" }
+          ],
+          "having": [
+            { "logic": "AND", "indent": 0, "left": "sum_amt", "op": "GT", "rightType": "CONST", "right": "1000", "right2": null }
+          ],
+          "limit": 10000,
+          "offset": 0
+        }
+      }
+    },
+    {
+      "id": "node_6",
+      "type": "sink",
+      "position": { "x": 830, "y": 270 },
+      "data": {
+        "label": "sink_ads",
+        "color": "#E6F7EE",
+        "config": { "targetType": null, "dataSourceId": null, "writeMode": null, "fieldMapping": [] }
+      }
+    }
+  ],
+  "edges": [
+    { "id": "edge_1", "source": "node_1", "target": "node_3", "sourceHandle": "out", "targetHandle": "in-0" },
+    { "id": "edge_2", "source": "node_2", "target": "node_4", "sourceHandle": "out", "targetHandle": "in-0" },
+    { "id": "edge_3", "source": "node_3", "target": "node_4", "sourceHandle": "out", "targetHandle": "in-1" },
+    { "id": "edge_4", "source": "node_4", "target": "node_5", "sourceHandle": "out", "targetHandle": "in-0" },
+    { "id": "edge_5", "source": "node_5", "target": "node_6", "sourceHandle": "out", "targetHandle": "in-0" }
+  ]
+}
