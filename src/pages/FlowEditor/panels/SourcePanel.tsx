@@ -9,12 +9,18 @@ import {
 } from '@ant-design/icons';
 import type { SourceConfig } from '../../../types';
 import { listColumns, listTables } from '../../../api/datasource';
-import { NodeCommon, SectionTitle, fieldOptions, type PanelProps } from './common';
+import { NodeCommon, SectionTitle, type PanelProps } from './common';
+import ConditionEditor from './ConditionEditor';
+import SqlPreview from './SqlPreview';
 
 export default function SourcePanel({
   node,
+  nodes,
+  edges,
+  flowId,
   onConfig,
   onMeta,
+  onPreviewSql,
   onPreviewData,
   dataSources,
 }: PanelProps) {
@@ -184,8 +190,19 @@ export default function SourcePanel({
         ) : null}
       </div>
 
-      <div className="form-hint">
-        Source 节点不生成 SQL，仅作为下游节点对原始表的引用。一张表可以在画布中生成多个 Source。
+      <div className="form-section">
+        <SectionTitle>过滤条件（导入时下推）</SectionTitle>
+        <div className="form-hint" style={{ marginBottom: 8 }}>
+          只把满足条件的行同步到 Doris；条件会下推到源库 WHERE，不先全量拉取。不配置则全量导入。
+        </div>
+        <ConditionEditor
+          conditions={cfg.filter?.conditions || []}
+          fields={cfg.fields || []}
+          alias="a"
+          allowRegexp={false}
+          emptyText="未配置过滤条件，全量导入。"
+          onChange={(conditions) => patch({ filter: { conditions } })}
+        />
       </div>
 
       <div style={{ marginTop: 14 }}>
@@ -196,6 +213,12 @@ export default function SourcePanel({
           onChange={(e) => onMeta({ label: e.target.value })}
           placeholder="默认显示表名(数据源名)"
         />
+      </div>
+
+      <SqlPreview node={node} nodes={nodes} edges={edges} flowId={flowId} onPreviewSql={onPreviewSql} />
+
+      <div className="form-hint" style={{ marginTop: 8 }}>
+        Source 执行时由后端 Stream Load 同步到 Doris，下游节点引用该副本表。一张表可以在画布中生成多个 Source。
       </div>
     </div>
   );

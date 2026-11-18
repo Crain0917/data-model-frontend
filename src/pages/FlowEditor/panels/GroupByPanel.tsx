@@ -2,19 +2,18 @@ import { useEffect } from 'react';
 import { Button, Input, InputNumber, Select, Switch } from 'antd';
 import {
   DeleteOutlined,
-  FormOutlined,
   PlusOutlined,
   TableOutlined,
 } from '@ant-design/icons';
 import type { ConditionRow, FieldDef, GroupByConfig } from '../../../types';
 import {
-  buildNodeSql,
   conditionsSql,
   findUpstream,
   outputFields,
   OPERATOR_OPTIONS,
 } from '../../../utils/dagUtils';
 import { DangerLine, NodeCommon, SectionTitle, WarningLine, fieldOptions, type PanelProps } from './common';
+import SqlPreview from './SqlPreview';
 
 const FUNCS = [
   { value: 'SUM', label: 'SUM' },
@@ -68,7 +67,6 @@ export default function GroupByPanel({
     ...aggregates.map((a) => ({ name: a.alias || `${a.func.toLowerCase()}_${a.field}`, type: a.type || 'DOUBLE' })),
   ];
   const badHaving = having.filter((h) => h.left && !havingFields.some((f) => f.name === h.left));
-  const sql = buildNodeSql(node, nodes, edges, flowId);
 
   if (!upstream) {
     return (
@@ -365,18 +363,12 @@ export default function GroupByPanel({
       </div>
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        <Button icon={<FormOutlined />} onClick={() => onPreviewSql(sql)}>
-          预览 SQL
-        </Button>
         <Button icon={<TableOutlined />} onClick={() => onPreviewData(outputFields(node, nodes, edges))}>
           预览数据
         </Button>
       </div>
 
-      <div style={{ marginTop: 12 }}>
-        <div className="form-hint" style={{ marginBottom: 6 }}>生成 SQL 预览</div>
-        <pre className="sql-preview" style={{ maxHeight: 220 }}>{sql}</pre>
-      </div>
+      <SqlPreview node={node} nodes={nodes} edges={edges} flowId={flowId} onPreviewSql={onPreviewSql} />
     </div>
   );
 }

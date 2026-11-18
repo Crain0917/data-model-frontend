@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
-import { Button, Input, Select, Skeleton } from 'antd';
-import { PlusOutlined, SearchOutlined } from '@ant-design/icons';
+import { Button, Input, Select, Skeleton, Tooltip } from 'antd';
+import { MenuFoldOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons';
 import type { DataSource } from '../../types';
 
 interface Props {
@@ -9,11 +9,12 @@ interface Props {
   selectedId: number | null;
   onSelect: (id: number) => void;
   onOpenCreate: () => void;
+  onCollapse: () => void;
 }
 
 const TYPE_LABEL: Record<string, string> = { MYSQL: 'MySQL', DORIS: 'Doris', DM8: 'DM8' };
 
-export default function DataSourceColumn({ dataSources, loading, selectedId, onSelect, onOpenCreate }: Props) {
+export default function DataSourceColumn({ dataSources, loading, selectedId, onSelect, onOpenCreate, onCollapse }: Props) {
   const [keyword, setKeyword] = useState('');
   const filtered = useMemo(
     () => dataSources.filter((d) => (keyword ? d.name.toLowerCase().includes(keyword.toLowerCase()) : true)),
@@ -25,7 +26,12 @@ export default function DataSourceColumn({ dataSources, loading, selectedId, onS
       <div className="col-head">
         <div className="col-title">
           <span>① 数据源</span>
-          <span className="mini-tag">{dataSources.length}</span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span className="mini-tag">{dataSources.length}</span>
+            <Tooltip title="收起数据源侧栏">
+              <Button type="text" size="small" icon={<MenuFoldOutlined />} onClick={onCollapse} />
+            </Tooltip>
+          </span>
         </div>
         <Select
           size="small"

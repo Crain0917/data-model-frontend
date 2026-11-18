@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { App, Button, Dropdown, Input, Tooltip } from 'antd';
+import { App, Button, Dropdown, Tooltip } from 'antd';
 import {
   ArrowLeftOutlined,
   CheckCircleFilled,
@@ -10,39 +10,73 @@ import {
   EditOutlined,
   ExclamationCircleOutlined,
   HistoryOutlined,
+  MenuUnfoldOutlined,
   PlayCircleFilled,
   ReloadOutlined,
   SaveOutlined,
   WarningFilled,
 } from '@ant-design/icons';
-import type { DataSource, FlowRun, NodeRun, TableInfo } from '../../types';
+import type { DataSource, FlowDeleteResult, FlowRun, TableInfo } from '../../types';
 import { listDataSources } from '../../api/datasource';
 import { listColumns, listTables } from '../../api/datasource';
-import { appendRun, deleteFlow, duplicateFlow, markFlowRun, updateFlowMeta } from '../../api/flow';
-import { createNode, buildNodeSql } from '../../utils/dagUtils';
+import { duplicateFlow, getRun, listRuns, startNodeRun, startRun } from '../../api/flow';
+import { createNode } from '../../utils/dagUtils';
 import { dagWarnings } from '../../utils/validation';
 import { useFlowStore } from './store';
 import DataSourceColumn from './DataSourceColumn';
 import TableColumn from './TableColumn';
 import Canvas from './Canvas';
 import ConfigDrawer from './ConfigDrawer';
+import EditFlowModal from '../../components/EditFlowModal';
+import DeleteFlowModal from '../../components/DeleteFlowModal';
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const FAIL_STAGE_LABEL: Record<string, string> = {
+  SOURCE_READ: '源库读取',
+  TYPE_MAPPING: '类型映射',
+  STREAM_LOAD: 'Stream Load 写入',
+  SINK_WRITE: 'Sink 写入',
+  DORIS_EXEC: 'Doris 计算',
+  VALIDATE: '行数校验',
+  OTHER: '执行',
+};
 
-function stamp(d = new Date()) {
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+function durationText(ms?: number | null) {
+  if (ms == null) return '—';
+  if (ms < 1000) return `${ms} ms`;
+  return `${(ms / 1000).toFixed(1)} s`;
 }
 
-function runIdStamp(d: Date) {
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+const COLLAPSE_KEY = 'df.editor.collapsed';
+type CollapsedState = { ds: boolean; tables: boolean };
+
+function readCollapsed(): CollapsedState {
+  try {
+    const raw = localStorage.getItem(COLLAPSE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<CollapsedState>;
+      return { ds: Boolean(parsed.ds), tables: Boolean(parsed.tables) };
+    }
+  } catch {
+    // 本地存储不可用时保持默认展开
+  }
+  return { ds: false, tables: false };
+}
+
+function CollapsedRail({ label, onExpand }: { label: string; onExpand: () => void }) {
+  return (
+    <div className="editor-rail">
+      <Tooltip title={`展开${label}侧栏`} placement="right">
+        <Button type="text" size="small" icon={<MenuUnfoldOutlined />} onClick={onExpand} />
+      </Tooltip>
+      <span className="editor-rail-label">{label}</span>
+    </div>
+  );
 }
 
 export default function FlowEditorPage() {
   const { flowId } = useParams<{ flowId: string }>();
   const navigate = useNavigate();
-  const { message, modal } = App.useApp();
+  const { message } = App.useApp();
 
   const flow = useFlowStore((s) => s.flow);
   const nodes = useFlowStore((s) => s.nodes);
@@ -50,6 +84,7 @@ export default function FlowEditorPage() {
   const loading = useFlowStore((s) => s.loading);
   const error = useFlowStore((s) => s.error);
   const saveStatus = useFlowStore((s) => s.saveStatus);
+  const saveError = useFlowStore((s) => s.saveError);
   const lastSavedAt = useFlowStore((s) => s.lastSavedAt);
   const changeSeq = useFlowStore((s) => s.changeSeq);
   const load = useFlowStore((s) => s.load);
@@ -65,8 +100,34 @@ export default function FlowEditorPage() {
   const [tablesLoading, setTablesLoading] = useState(false);
   const [tablesError, setTablesError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
-  const [editingName, setEditingName] = useState(false);
-  const [nameDraft, setNameDraft] = useState('');
+  const [lastRun, setLastRun] = useState<FlowRun | null>(null);
+  const [editOpen, setEditOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState<CollapsedState>(readCollapsed);
+  const [fitSignal, setFitSignal] = useState(0);
+  const firstCollapseRender = useRef(true);
+  const pollTimer = useRef<number | null>(null);
+  const pollToken = useRef(0);
+
+  useEffect(() => {
+    if (firstCollapseRender.current) {
+      firstCollapseRender.current = false;
+      return;
+    }
+    setFitSignal((v) => v + 1);
+  }, [collapsed.ds, collapsed.tables]);
+
+  const toggleColumn = (key: keyof CollapsedState) => {
+    setCollapsed((prev) => {
+      const next = { ...prev, [key]: !prev[key] };
+      try {
+        localStorage.setItem(COLLAPSE_KEY, JSON.stringify(next));
+      } catch {
+        // 忽略存储失败
+      }
+      return next;
+    });
+  };
 
   useEffect(() => {
     if (flowId) load(flowId);
@@ -181,6 +242,124 @@ export default function FlowEditorPage() {
     }
   };
 
+  const stopPolling = useCallback(() => {
+    if (pollTimer.current !== null) {
+      window.clearTimeout(pollTimer.current);
+      pollTimer.current = null;
+    }
+    pollToken.current += 1;
+  }, []);
+
+  const applyRunStatuses = useCallback(
+    (run: FlowRun) => {
+      const byNode = new Map(run.nodes.map((n) => [n.nodeId, n]));
+      useFlowStore.getState().nodes.forEach((n) => {
+        const nr = byNode.get(n.id);
+        if (!nr) {
+          // 单节点重试只返回目标节点，其他节点保留上一次的状态
+          if (run.runType === 'NODE') return;
+          setRunStatus(n.id, null);
+          return;
+        }
+        const status =
+          nr.status === 'PENDING' || nr.status === 'WAITING'
+            ? 'RUNNING'
+            : (nr.status as 'RUNNING' | 'SUCCESS' | 'FAILED' | 'SKIPPED');
+        setRunStatus(n.id, status);
+      });
+    },
+    [setRunStatus],
+  );
+
+  const pollRun = useCallback(
+    (runId: string, token: number) => {
+      getRun(runId)
+        .then((run) => {
+          if (token !== pollToken.current) return;
+          setLastRun(run);
+          applyRunStatuses(run);
+          if (run.status === 'RUNNING' || run.status === 'PENDING') {
+            pollTimer.current = window.setTimeout(() => pollRun(runId, token), 1500);
+            return;
+          }
+          setRunning(false);
+          setFlowMeta({ lastRunStatus: run.status, lastRunTime: run.endTime || null });
+          if (run.status === 'SUCCESS') {
+            message.success({
+              content: `执行成功：${run.nodes.length} 个节点，耗时 ${durationText(run.durationMs)}`,
+              key: 'flow-run',
+              duration: 3,
+            });
+          } else {
+            const failed = run.nodes.find((n) => n.status === 'FAILED');
+            const stage = failed?.failStage ? FAIL_STAGE_LABEL[failed.failStage] || failed.failStage : '执行';
+            message.error({
+              content: `执行失败：${failed?.nodeName || '未知节点'}（${stage}）${
+                failed?.errorStack ? `：${failed.errorStack}` : ''
+              }`,
+              key: 'flow-run',
+              duration: 6,
+            });
+          }
+        })
+        .catch((e) => {
+          if (token !== pollToken.current) return;
+          setRunning(false);
+          message.error({ content: `查询执行状态失败：${(e as Error).message}`, key: 'flow-run', duration: 5 });
+        });
+    },
+    [applyRunStatuses, message, setFlowMeta],
+  );
+
+  const retryNode = useCallback(
+    async (nodeId: string) => {
+      if (!flow || running) return;
+      setRunning(true);
+      stopPolling();
+      const token = pollToken.current;
+      message.loading({ content: '节点重试提交中…', key: 'flow-run', duration: 0 });
+      try {
+        const runId = await startNodeRun(flow.id, nodeId, true);
+        setRunStatus(nodeId, 'RUNNING');
+        message.loading({ content: `节点重试执行中（run #${runId}）…`, key: 'flow-run', duration: 0 });
+        pollRun(runId, token);
+      } catch (e) {
+        setRunning(false);
+        message.error({ content: (e as Error).message || '节点重试失败', key: 'flow-run', duration: 5 });
+      }
+    },
+    [flow, running, stopPolling, message, setRunStatus, pollRun],
+  );
+
+  useEffect(() => () => stopPolling(), [stopPolling]);
+
+  // 刷新或重新进入时从运行记录恢复节点状态；未结束的运行继续轮询
+  useEffect(() => {
+    if (!flow?.id) return;
+    let alive = true;
+    stopPolling();
+    listRuns(flow.id)
+      .then((runs) => {
+        if (!alive || !runs.length) return undefined;
+        return getRun(runs[0].id).then((run) => {
+          if (!alive) return;
+          setLastRun(run);
+          applyRunStatuses(run);
+          if (run.status === 'RUNNING' || run.status === 'PENDING') {
+            setRunning(true);
+            pollRun(run.id, pollToken.current);
+          }
+        });
+      })
+      .catch(() => {
+        // 运行记录不可用时不影响画布
+      });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flow?.id]);
+
   const runFlow = async () => {
     if (!flow || running) return;
     if (!nodes.length) {
@@ -192,64 +371,25 @@ export default function FlowEditorPage() {
       return;
     }
     setRunning(true);
-    message.loading({ content: '任务执行中…', key: 'flow-run', duration: 0 });
-    const ordered = [...nodes].sort((a, b) => a.position.x - b.position.x || a.position.y - b.position.y);
-    const started = new Date();
-    const nodeRuns: NodeRun[] = [];
-    for (const node of ordered) {
-      setRunStatus(node.id, 'RUNNING');
-      await sleep(420);
-      const status = node.data.kind === 'sink' ? 'SKIPPED' : 'SUCCESS';
-      const duration = 260 + Math.round(Math.random() * 900);
-      setRunStatus(node.id, status);
-      nodeRuns.push({
-        nodeId: node.id,
-        nodeName: node.data.label,
-        status,
-        rows: status === 'SKIPPED' ? null : 1000 + Math.floor(Math.random() * 90000),
-        durationMs: duration,
-        sql: buildNodeSql(node, nodes, edges, flow.id),
-        logs: [
-          `[${stamp(new Date())}] ${node.data.label} 开始执行`,
-          status === 'SKIPPED'
-            ? `[${stamp(new Date())}] v1 未启用 Sink，节点跳过`
-            : `[${stamp(new Date())}] 执行完成，耗时 ${duration}ms`,
-        ],
+    stopPolling();
+    const token = pollToken.current;
+    message.loading({ content: '任务提交中…', key: 'flow-run', duration: 0 });
+    try {
+      await save(true);
+      if (useFlowStore.getState().saveStatus === 'error') {
+        throw new Error(useFlowStore.getState().saveError || '画布保存失败，已取消执行');
+      }
+      const runId = await startRun(flow.id);
+      useFlowStore.getState().nodes.forEach((n) => {
+        setRunStatus(n.id, 'RUNNING');
       });
+      setLastRun(null);
+      message.loading({ content: `任务执行中（run #${runId}）…`, key: 'flow-run', duration: 0 });
+      pollRun(runId, token);
+    } catch (e) {
+      setRunning(false);
+      message.error({ content: (e as Error).message || '任务提交失败', key: 'flow-run', duration: 4 });
     }
-    const ended = new Date();
-    const run: FlowRun = {
-      id: `R-${flow.id}-${runIdStamp(started)}`,
-      flowId: flow.id,
-      flowName: flow.name,
-      status: 'SUCCESS',
-      startTime: stamp(started),
-      endTime: stamp(ended),
-      durationMs: ended.getTime() - started.getTime(),
-      trigger: 'MANUAL',
-      nodes: nodeRuns,
-    };
-    appendRun(run);
-    markFlowRun(flow.id, 'SUCCESS');
-    setFlowMeta({ lastRunStatus: 'SUCCESS', lastRunTime: stamp(ended) });
-    setRunning(false);
-    message.success({ content: `执行完成：${ordered.length} 个节点`, key: 'flow-run', duration: 2.5 });
-    setTimeout(() => {
-      ordered.forEach((n) => setRunStatus(n.id, null));
-    }, 6000);
-  };
-
-  const commitName = async () => {
-    const next = nameDraft.trim();
-    setEditingName(false);
-    if (!flow || !next || next === flow.name) return;
-    if (next.length > 50) {
-      message.warning('任务名称不能超过 50 个字符');
-      return;
-    }
-    await updateFlowMeta(flow.id, { name: next });
-    setFlowMeta({ name: next });
-    message.success('任务名称已更新');
   };
 
   const moreMenu = {
@@ -275,8 +415,13 @@ export default function FlowEditorPage() {
         label: '复制任务',
         onClick: async () => {
           if (!flow) return;
-          await duplicateFlow(flow.id);
-          message.success('任务已复制');
+          try {
+            const copy = await duplicateFlow(flow.id);
+            message.success('任务已复制');
+            navigate(`/flow/${copy.id}/editor`);
+          } catch (e) {
+            message.error((e as Error).message || '复制失败');
+          }
         },
       },
       { type: 'divider' as const },
@@ -285,23 +430,25 @@ export default function FlowEditorPage() {
         icon: <DeleteOutlined />,
         label: '删除任务',
         danger: true,
-        onClick: () => {
-          if (!flow) return;
-          modal.confirm({
-            title: `删除任务「${flow.name}」？`,
-            content: '画布、配置与执行记录将一并删除，该操作不可撤销。',
-            okText: '删除',
-            okButtonProps: { danger: true },
-            cancelText: '取消',
-            onOk: async () => {
-              await deleteFlow(flow.id);
-              message.success('任务已删除');
-              navigate('/flow');
-            },
-          });
-        },
+        onClick: () => setDeleteOpen(true),
       },
     ],
+  };
+
+  const onDeleted = (result: FlowDeleteResult) => {
+    // 任务已不存在，丢弃本地待保存状态，避免卸载时再向已删除任务发保存请求
+    useFlowStore.setState({ changeSeq: 0, saveStatus: 'saved', saveError: null });
+    if (result.failedTables?.length) {
+      message.warning(
+        `任务已删除，但 ${result.failedTables.length} 张节点表删除失败：${result.failedTables
+          .map((t) => t.dorisTable)
+          .join('、')}`,
+        6,
+      );
+    } else if (result.deletedTables?.length) {
+      message.success(`Doris 表清理 ${result.deletedTables.length} 张`);
+    }
+    navigate('/flow');
   };
 
   if (loading) {
@@ -347,23 +494,18 @@ export default function FlowEditorPage() {
           <Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate('/flow')} />
         </Tooltip>
         <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>任务管理 /</span>
-        {editingName ? (
-          <Input
+        <Tooltip title={flow.description || '点击铅笔编辑任务名称与描述'}>
+          <div className="editor-title">{flow.name}</div>
+        </Tooltip>
+        <Tooltip title="编辑任务名称与描述">
+          <Button
+            type="text"
             size="small"
-            value={nameDraft}
-            style={{ width: 260 }}
-            maxLength={50}
-            autoFocus
-            onChange={(e) => setNameDraft(e.target.value)}
-            onPressEnter={commitName}
-            onBlur={commitName}
+            icon={<EditOutlined />}
+            onClick={() => setEditOpen(true)}
+            aria-label="编辑任务信息"
           />
-        ) : (
-          <div className="editor-title" onClick={() => { setNameDraft(flow.name); setEditingName(true); }} style={{ cursor: 'text' }}>
-            {flow.name}
-            <EditOutlined style={{ fontSize: 11, marginLeft: 6, color: 'var(--text-tertiary)' }} />
-          </div>
-        )}
+        </Tooltip>
         <span className="chip">flow_{flow.id}</span>
         {warnings.length ? (
           <Tooltip
@@ -394,12 +536,14 @@ export default function FlowEditorPage() {
               <span className="status-dot" style={{ background: 'var(--info)' }} /> 保存中…
             </>
           ) : saveStatus === 'error' ? (
-            <button
-              onClick={() => save(true)}
-              style={{ border: 0, background: 'none', color: 'var(--danger)', cursor: 'pointer', fontSize: 12 }}
-            >
-              保存失败，点击重试
-            </button>
+            <Tooltip title={saveError || '画布保存失败'}>
+              <button
+                onClick={() => save(true)}
+                style={{ border: 0, background: 'none', color: 'var(--danger)', cursor: 'pointer', fontSize: 12 }}
+              >
+                保存失败，点击重试
+              </button>
+            </Tooltip>
           ) : (
             <>
               <span className="status-dot status-dot--success" /> 已保存 {lastSavedAt || ''}
@@ -407,7 +551,7 @@ export default function FlowEditorPage() {
           )}
         </span>
 
-        <Tooltip title="执行引擎 M4 接入，当前按 DAG 顺序模拟节点执行">
+        <Tooltip title="提交到后端：源表先同步到 Doris，各节点用 Doris SQL 计算">
           <Button type="primary" icon={<PlayCircleFilled />} loading={running} onClick={runFlow}>
             运行任务
           </Button>
@@ -420,33 +564,106 @@ export default function FlowEditorPage() {
         </Dropdown>
       </div>
 
+      {lastRun && (lastRun.status === 'FAILED' || lastRun.status === 'RUNNING' || lastRun.status === 'PENDING') ? (
+        <div
+          className={lastRun.status === 'FAILED' ? 'warn-line' : 'form-hint'}
+          style={{
+            margin: 0,
+            borderRadius: 0,
+            borderLeft: 0,
+            borderRight: 0,
+            padding: '7px 18px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            fontSize: 12,
+          }}
+        >
+          <span>{lastRun.status === 'FAILED' ? '✕' : '⏳'}</span>
+          <span>
+            run #{lastRun.id}
+            {lastRun.status === 'FAILED'
+              ? (() => {
+                  const failed = lastRun.nodes.find((n) => n.status === 'FAILED');
+                  const stage = failed?.failStage ? FAIL_STAGE_LABEL[failed.failStage] || failed.failStage : '执行';
+                  return ` 失败于「${failed?.nodeName || '未知节点'}」· ${stage}${
+                    failed?.errorStack ? `：${failed.errorStack}` : ''
+                  }`;
+                })()
+              : ' 正在执行…'}
+          </span>
+          <span style={{ marginLeft: 'auto', color: 'var(--text-tertiary)' }}>
+            {lastRun.startTime}
+            {lastRun.endTime ? ` → ${lastRun.endTime}` : ''}
+          </span>
+        </div>
+      ) : null}
+
       <div className="editor-body">
-        <DataSourceColumn
-          dataSources={dataSources}
-          loading={dsLoading}
-          selectedId={dsId}
-          onSelect={setDsId}
-          onOpenCreate={() => window.open('/data-source', '_blank')}
-        />
-        <TableColumn
-          dataSource={selectedDs}
-          tables={tables}
-          loading={tablesLoading}
-          error={tablesError}
-          onRefresh={() => dsId && loadTables(dsId)}
-          onAdd={addSource}
-        />
+        {collapsed.ds ? (
+          <CollapsedRail label="数据源" onExpand={() => toggleColumn('ds')} />
+        ) : (
+          <DataSourceColumn
+            dataSources={dataSources}
+            loading={dsLoading}
+            selectedId={dsId}
+            onSelect={setDsId}
+            onOpenCreate={() => window.open('/data-source', '_blank')}
+            onCollapse={() => toggleColumn('ds')}
+          />
+        )}
+        {collapsed.tables ? (
+          <CollapsedRail label="表" onExpand={() => toggleColumn('tables')} />
+        ) : (
+          <TableColumn
+            dataSource={selectedDs}
+            tables={tables}
+            loading={tablesLoading}
+            error={tablesError}
+            onRefresh={() => dsId && loadTables(dsId)}
+            onAdd={addSource}
+            onCollapse={() => toggleColumn('tables')}
+          />
+        )}
         <div className="canvas-area">
-          <Canvas flowId={flow.id} nodes={nodes} edges={edges} />
-          <ConfigDrawer nodes={nodes} edges={edges} flowId={flow.id} dataSources={dataSources} />
+          <Canvas flowId={flow.id} nodes={nodes} edges={edges} fitSignal={fitSignal} />
+          <ConfigDrawer
+            nodes={nodes}
+            edges={edges}
+            flowId={flow.id}
+            dataSources={dataSources}
+            lastRun={lastRun}
+            onRetryNode={retryNode}
+          />
         </div>
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 18px', borderTop: '1px solid var(--border)', background: 'var(--bg-elevated)', fontSize: 11, color: 'var(--text-tertiary)' }}>
         <CheckCircleFilled style={{ color: 'var(--success)' }} />
         节点 {nodes.length} · 连线 {edges.length} · 变更自动保存（2s 防抖）
-        <span style={{ marginLeft: 'auto' }}>v1 · Sink 仅占位</span>
+        <span style={{ marginLeft: 'auto' }}>执行在 Doris 内完成 · Sink 按目标配置写入</span>
       </div>
+
+      <EditFlowModal
+        open={editOpen}
+        flow={flow}
+        onClose={() => setEditOpen(false)}
+        onSaved={(result) => {
+          setFlowMeta({
+            name: result.name,
+            description: result.description,
+            updateTime: result.updateTime || flow.updateTime,
+          });
+          document.title = `${result.name} · 可视化数据集成平台`;
+        }}
+      />
+
+      <DeleteFlowModal
+        open={deleteOpen}
+        flow={flow}
+        onClose={() => setDeleteOpen(false)}
+        onDeleted={onDeleted}
+      />
     </div>
   );
 }

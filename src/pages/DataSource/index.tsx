@@ -210,7 +210,7 @@ export default function DataSourcePage() {
   ];
 
   return (
-    <div>
+    <div className="page-stack">
       <div className="page-head">
         <div>
           <h1 className="page-title">
@@ -277,8 +277,8 @@ export default function DataSourcePage() {
         ))}
       </div>
 
-      <div className="card" style={{ padding: '14px 16px 18px' }}>
-        <div className="toolbar" style={{ marginBottom: 14 }}>
+      <div className="card ds-table-card">
+        <div className="toolbar ds-toolbar">
           <Input
             allowClear
             value={keyword}
@@ -306,75 +306,78 @@ export default function DataSourcePage() {
           </Tooltip>
         </div>
 
-        {error ? (
-          <EmptyState
-            icon={<ExclamationCircleOutlined />}
-            title="加载失败，请稍后重试"
-            text={error}
-            action={<Button type="primary" onClick={load}>重试</Button>}
-          />
-        ) : loading ? (
-          <div style={{ padding: '8px 0' }}>
-            {[0, 1, 2].map((i) => (
-              <div key={i} className="skeleton-row" />
-            ))}
-          </div>
-        ) : all.length === 0 ? (
-          keyword || type ? (
+        <div className="ds-table-scroll">
+          {error ? (
             <EmptyState
-              icon={<SearchOutlined />}
-              title="没有匹配的数据源"
-              action={
-                <Button
-                  onClick={() => {
-                    setKeyword('');
-                    setType('');
-                  }}
-                >
-                  清空筛选
-                </Button>
-              }
+              icon={<ExclamationCircleOutlined />}
+              title="加载失败，请稍后重试"
+              text={error}
+              action={<Button type="primary" onClick={load}>重试</Button>}
             />
+          ) : loading ? (
+            <div style={{ padding: '8px 0' }}>
+              {[0, 1, 2].map((i) => (
+                <div key={i} className="skeleton-row" />
+              ))}
+            </div>
+          ) : all.length === 0 ? (
+            keyword || type ? (
+              <EmptyState
+                icon={<SearchOutlined />}
+                title="没有匹配的数据源"
+                action={
+                  <Button
+                    onClick={() => {
+                      setKeyword('');
+                      setType('');
+                    }}
+                  >
+                    清空筛选
+                  </Button>
+                }
+              />
+            ) : (
+              <EmptyState
+                icon={<DatabaseOutlined />}
+                title="还没有数据源"
+                text="数据源用于拉取表结构与执行 Doris SQL，业务数据不会经过本平台。"
+                action={
+                  <Button
+                    type="primary"
+                    icon={<PlusOutlined />}
+                    onClick={() => {
+                      setEditing(null);
+                      setDrawerOpen(true);
+                    }}
+                  >
+                    新建数据源
+                  </Button>
+                }
+              />
+            )
           ) : (
-            <EmptyState
-              icon={<DatabaseOutlined />}
-              title="还没有数据源"
-              text="数据源用于拉取表结构与执行 Doris SQL，业务数据不会经过本平台。"
-              action={
-                <Button
-                  type="primary"
-                  icon={<PlusOutlined />}
-                  onClick={() => {
-                    setEditing(null);
-                    setDrawerOpen(true);
-                  }}
-                >
-                  新建数据源
-                </Button>
-              }
-            />
-          )
-        ) : (
-          <>
             <Table
               rowKey="id"
               size="middle"
               columns={columns}
               dataSource={paged}
               pagination={false}
+              scroll={{ x: 980 }}
             />
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}>
-              <Pagination
-                current={page}
-                pageSize={20}
-                total={all.length}
-                showSizeChanger={false}
-                showTotal={(t) => `共 ${t} 个数据源`}
-                onChange={setPage}
-              />
-            </div>
-          </>
-        )}
+          )}
+        </div>
+        {!error && !loading && all.length > 0 ? (
+          <div className="ds-pagination">
+            <Pagination
+              current={page}
+              pageSize={20}
+              total={all.length}
+              showSizeChanger={false}
+              showTotal={(t) => `共 ${t} 个数据源`}
+              onChange={setPage}
+            />
+          </div>
+        ) : null}
       </div>
 
       <DataSourceDrawer

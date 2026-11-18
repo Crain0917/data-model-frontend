@@ -20,6 +20,7 @@ interface FlowState {
   loading: boolean;
   error: string | null;
   saveStatus: SaveStatus;
+  saveError: string | null;
   lastSavedAt: string | null;
   changeSeq: number;
   viewport: FlowViewport;
@@ -57,6 +58,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   loading: true,
   error: null,
   saveStatus: 'saved',
+  saveError: null,
   lastSavedAt: null,
   changeSeq: 0,
   viewport: { x: 0, y: 0, zoom: 1 },
@@ -76,6 +78,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
         viewport: flow.viewport || { x: 0, y: 0, zoom: 1 },
         loading: false,
         saveStatus: 'saved',
+        saveError: null,
         lastSavedAt: flow.updateTime?.slice(11, 19) || null,
       });
     } catch (e) {
@@ -232,9 +235,14 @@ export const useFlowStore = create<FlowState>((set, get) => ({
         viewport,
         dagJson: toDagJson(nodes, edges),
       });
-      set({ saveStatus: 'saved', lastSavedAt: nowTime(), changeSeq: get().changeSeq });
-    } catch {
-      set({ saveStatus: 'error' });
+      set({
+        saveStatus: 'saved',
+        saveError: null,
+        lastSavedAt: nowTime(),
+        changeSeq: get().changeSeq,
+      });
+    } catch (e) {
+      set({ saveStatus: 'error', saveError: (e as Error).message || '画布保存失败' });
     }
   },
 }));

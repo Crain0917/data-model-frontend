@@ -2,7 +2,6 @@ import { useEffect } from 'react';
 import { Button, Checkbox, Input, Radio, Select } from 'antd';
 import {
   DeleteOutlined,
-  FormOutlined,
   PlusOutlined,
   SwapOutlined,
   TableOutlined,
@@ -10,8 +9,8 @@ import {
 } from '@ant-design/icons';
 import type { FieldDef, JoinConfig } from '../../../types';
 import { outputFields } from '../../../utils/dagUtils';
-import { buildNodeSql } from '../../../utils/dagUtils';
 import { DangerLine, NodeCommon, SectionTitle, WarningLine, fieldOptions, type PanelProps } from './common';
+import SqlPreview from './SqlPreview';
 
 export default function JoinPanel({
   node,
@@ -35,7 +34,6 @@ export default function JoinPanel({
   const rightFields: FieldDef[] = rightNode ? outputFields(rightNode, nodes, edges) : [];
   const keys = cfg.keys || [];
   const projection = cfg.projection || [];
-  const sql = buildNodeSql(node, nodes, edges, flowId);
 
   useEffect(() => {
     if (!leftFields.length || !rightFields.length) return;
@@ -265,18 +263,12 @@ export default function JoinPanel({
       </div>
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        <Button icon={<FormOutlined />} onClick={() => onPreviewSql(sql)}>
-          预览 SQL
-        </Button>
         <Button icon={<TableOutlined />} onClick={() => onPreviewData(output)}>
           预览数据
         </Button>
       </div>
 
-      <div style={{ marginTop: 12 }}>
-        <div className="form-hint" style={{ marginBottom: 6 }}>生成 SQL 预览</div>
-        <pre className="sql-preview" style={{ maxHeight: 220 }}>{sql}</pre>
-      </div>
+      <SqlPreview node={node} nodes={nodes} edges={edges} flowId={flowId} onPreviewSql={onPreviewSql} />
     </div>
   );
 }

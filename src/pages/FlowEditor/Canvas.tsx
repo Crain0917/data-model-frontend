@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Background,
   BackgroundVariant,
@@ -8,7 +8,9 @@ import {
   ReactFlow,
   ReactFlowProvider,
   useReactFlow,
+  useStore,
   type Connection,
+  type NodeChange,
   type NodeTypes,
 } from '@xyflow/react';
 import { App } from 'antd';
@@ -16,6 +18,7 @@ import { DeleteOutlined, ThunderboltFilled } from '@ant-design/icons';
 import type { FlowEdge, FlowNode, FlowNodeKind } from '../../types';
 import { NODE_META } from '../../utils/nodeMeta';
 import { createNode } from '../../utils/dagUtils';
+import { getHelperLines } from '../../utils/helperLines';
 import { nodeWarning, validateConnection } from '../../utils/validation';
 import { listColumns } from '../../api/datasource';
 import { useFlowStore } from './store';
@@ -27,6 +30,9 @@ import NodePalette from './NodePalette';
 const nodeTypes: NodeTypes = {
   source: SourceNode,
   filter: TransformNode,
+  convert: TransformNode,
+  calculator: TransformNode,
+  formula: TransformNode,
   groupBy: TransformNode,
   join: TransformNode,
   union: TransformNode,
@@ -37,11 +43,37 @@ interface Props {
   flowId: string;
   nodes: FlowNode[];
   edges: FlowEdge[];
+  fitSignal?: number;
 }
 
-function CanvasInner({ flowId, nodes, edges }: Props) {
+interface HelperLineState {
+  horizontal?: number;
+  vertical?: number;
+}
+
+function HelperLinesRenderer({ horizontal, vertical }: HelperLineState) {
+  const transform = useStore((s) => s.transform);
+  if (horizontal === undefined && vertical === undefined) return null;
+  return (
+    <div
+      className="helper-lines"
+      style={{
+        transform: `translate(${transform[0]}px, ${transform[1]}px) scale(${transform[2]})`,
+      }}
+    >
+      {vertical !== undefined ? (
+        <div className="helper-line helper-line--vertical" style={{ transform: `translateX(${vertical}px)` }} />
+      ) : null}
+      {horizontal !== undefined ? (
+        <div className="helper-line helper-line--horizontal" style={{ transform: `translateY(${horizontal}px)` }} />
+      ) : null}
+    </div>
+  );
+}
+
+function CanvasInner({ flowId, nodes, edges, fitSignal = 0 }: Props) {
   const { message } = App.useApp();
-  const { screenToFlowPosition } = useReactFlow();
+  const { screenToFlowPosition, fitView } = useReactFlow();
   const onNodesChange = useFlowStore((s) => s.onNodesChange);
   const onEdgesChange = useFlowStore((s) => s.onEdgesChange);
   const connect = useFlowStore((s) => s.connect);
@@ -51,7 +83,56 @@ function CanvasInner({ flowId, nodes, edges }: Props) {
   const viewport = useFlowStore((s) => s.viewport);
   const setViewport = useFlowStore((s) => s.setViewport);
   const [dragOver, setDragOver] = useState(false);
+  const [helperLines, setHelperLines] = useState<HelperLineState>({});
+  const helperLinesRef = useRef<HelperLineState>({});
   const wrapperRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!fitSignal) return;
+    const timer = window.setTimeout(() => {
+      void fitView({ padding: 0.22, duration: 220 });
+    }, 240);
+    return () => window.clearTimeout(timer);
+  }, [fitSignal, fitView]);
+
+  const handleNodesChange = useCallback(
+    (changes: NodeChange<FlowNode>[]) => {
+      const dragChange = changes.find(
+        (c): c is Extract<NodeChange<FlowNode>, { type: 'position' }> => c.type === 'position' && Boolean((c as { dragging?: boolean }).dragging),
+      );
+      if (!dragChange) {
+        if (helperLinesRef.current.horizontal !== undefined || helperLinesRef.current.vertical !== undefined) {
+          helperLinesRef.current = {};
+          setHelperLines({});
+        }
+        onNodesChange(changes);
+        return;
+      }
+
+      const { horizontal, vertical, snapPosition } = getHelperLines(dragChange, nodes);
+      if (horizontal !== helperLinesRef.current.horizontal || vertical !== helperLinesRef.current.vertical) {
+        helperLinesRef.current = { horizontal, vertical };
+        setHelperLines({ horizontal, vertical });
+      }
+
+      if (snapPosition.x === undefined && snapPosition.y === undefined) {
+        onNodesChange(changes);
+        return;
+      }
+      const snapped = changes.map((change) => {
+        if (change !== dragChange || !('position' in change) || !change.position) return change;
+        return {
+          ...change,
+          position: {
+            x: snapPosition.x ?? change.position.x,
+            y: snapPosition.y ?? change.position.y,
+          },
+        };
+      });
+      onNodesChange(snapped as NodeChange<FlowNode>[]);
+    },
+    [nodes, onNodesChange],
+  );
 
   const nodesWithWarnings = useMemo(
     () =>
@@ -162,7 +243,7 @@ function CanvasInner({ flowId, nodes, edges }: Props) {
         nodes={nodesWithWarnings}
         edges={displayEdges}
         nodeTypes={nodeTypes}
-        onNodesChange={onNodesChange}
+        onNodesChange={handleNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
         isValidConnection={isValidConnection}
@@ -204,6 +285,7 @@ function CanvasInner({ flowId, nodes, edges }: Props) {
         style={{ background: 'transparent' }}
       >
         <Background variant={BackgroundVariant.Dots} gap={20} size={1.4} color="var(--dot-color)" />
+        <HelperLinesRenderer horizontal={helperLines.horizontal} vertical={helperLines.vertical} />
         <Controls position="bottom-left" showInteractive={false} />
         {nodes.length ? (
           <MiniMap

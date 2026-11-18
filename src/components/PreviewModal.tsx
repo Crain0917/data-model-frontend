@@ -1,46 +1,215 @@
-import { Modal, Table, Tag } from 'antd';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { Alert, Button, Collapse, Modal, Space, Spin, Table, Tag } from 'antd';
+import { CloudServerOutlined, DatabaseOutlined, ReloadOutlined } from '@ant-design/icons';
+import type { ColumnInfo, NodeDataPreview } from '../types';
+import { previewNodeData } from '../api/flow';
+import { ApiError } from '../api/http';
 
 interface PreviewModalProps {
   open: boolean;
   onClose: () => void;
   title: string;
-  columns: Array<{ name: string; type: string }>;
+  flowId: string;
+  nodeId?: string;
+  dagJson?: unknown;
+  fallbackColumns?: ColumnInfo[];
 }
 
-const SAMPLE_ROWS = [
-  ['100001', '88213', '238.00', 'PAID', '北京', '2026-11-13 08:12:31'],
-  ['100002', '88214', '1268.50', 'PAID', '上海', '2026-11-13 08:31:02'],
-  ['100003', '88215', '89.90', 'REFUND', '广州', '2026-11-13 08:45:18'],
-  ['100004', '88216', '512.00', 'PAID', '深圳', '2026-11-13 09:02:44'],
-  ['100005', '88217', '76.00', 'PAID', '杭州', '2026-11-13 09:18:09'],
-];
+interface PreviewError {
+  code: number;
+  message: string;
+}
 
-export default function PreviewModal({ open, onClose, title, columns }: PreviewModalProps) {
-  const cols = (columns.length ? columns : [{ name: 'id', type: 'BIGINT' }]).map((c) => ({
+const SOURCE_LABEL: Record<string, { text: string; color: string; icon: ReactNode }> = {
+  SOURCE_DB: { text: '源库（过滤条件下推）', color: 'blue', icon: <DatabaseOutlined /> },
+  DORIS: { text: 'Doris 物化表', color: 'green', icon: <CloudServerOutlined /> },
+  MOCK: { text: 'Mock 演示数据', color: 'orange', icon: <CloudServerOutlined /> },
+};
+
+function cellText(value: unknown) {
+  if (value === null || value === undefined) return <span style={{ color: 'var(--text-tertiary)' }}>NULL</span>;
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
+export default function PreviewModal({
+  open,
+  onClose,
+  title,
+  flowId,
+  nodeId,
+  dagJson,
+  fallbackColumns = [],
+}: PreviewModalProps) {
+  const [data, setData] = useState<NodeDataPreview | null>(null);
+  const [error, setError] = useState<PreviewError | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [token, setToken] = useState(0);
+
+  const load = useCallback(() => setToken((v) => v + 1), []);
+
+  useEffect(() => {
+    if (!open || !nodeId) return;
+    let alive = true;
+    setLoading(true);
+    setError(null);
+    setData(null);
+    previewNodeData(flowId, nodeId, dagJson, 100)
+      .then((res) => {
+        if (alive) setData(res);
+      })
+      .catch((e) => {
+        if (!alive) return;
+        const apiError = e as ApiError;
+        setError({
+          code: typeof apiError.code === 'number' ? apiError.code : -1,
+          message: apiError.message || '数据预览失败',
+        });
+      })
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [open, nodeId, flowId, dagJson, token]);
+
+  const columns = data?.columns?.length ? data.columns : fallbackColumns;
+  const records = (data?.rows || []).map((row, index) => {
+    const record: Record<string, unknown> = { __key: String(index) };
+    columns.forEach((c, i) => {
+      record[c.name] = row[i];
+    });
+    return record;
+  });
+
+  const tableColumns = columns.map((c) => ({
     title: (
       <span>
-        {c.name} <Tag style={{ marginLeft: 4, fontSize: 9 }}>{c.type}</Tag>
+        {c.name}
+        {c.type ? <Tag style={{ marginLeft: 4, fontSize: 9 }}>{c.type}</Tag> : null}
       </span>
     ),
     dataIndex: c.name,
     key: c.name,
     ellipsis: true,
+    render: cellText,
   }));
 
-  const data = SAMPLE_ROWS.slice(0, 5).map((row, i) => {
-    const record: Record<string, string> = { key: String(i) };
-    columns.forEach((c, idx) => {
-      record[c.name] = row[idx] ?? '—';
-    });
-    return record;
-  });
+  const sourceMeta = SOURCE_LABEL[data?.source || ''] || null;
 
   return (
-    <Modal open={open} onCancel={onClose} onOk={onClose} width={760} title={title} okText="关闭" cancelButtonProps={{ style: { display: 'none' } }}>
-      <div style={{ marginBottom: 10, fontSize: 12, color: 'var(--text-secondary)' }}>
-        预览前 100 行（示例数据，执行引擎接入后由 Doris 返回真实数据）
-      </div>
-      <Table size="small" columns={cols} dataSource={data} pagination={false} scroll={{ x: 'max-content' }} />
+    <Modal
+      open={open}
+      onCancel={onClose}
+      width={920}
+      title={title}
+      footer={
+        <Space>
+          <Button icon={<ReloadOutlined />} onClick={load} loading={loading}>
+            重新加载
+          </Button>
+          <Button type="primary" onClick={onClose}>
+            关闭
+          </Button>
+        </Space>
+      }
+      destroyOnHidden
+    >
+      {loading ? (
+        <div style={{ padding: '34px 0', textAlign: 'center' }}>
+          <Spin />
+          <div style={{ marginTop: 10, fontSize: 12.5, color: 'var(--text-secondary)' }}>
+            正在读取预览数据…
+          </div>
+        </div>
+      ) : error ? (
+        error.code === 4091 ? (
+          <Alert
+            type="warning"
+            showIcon
+            message="节点尚未物化，请先执行任务"
+            description="该节点还没有 Doris 物化表；执行一次任务（或先跑该节点）后再预览。"
+            action={
+              <Button size="small" onClick={load}>
+                重试
+              </Button>
+            }
+          />
+        ) : (
+          <Alert
+            type="error"
+            showIcon
+            message="预览失败"
+            description={error.message}
+            action={
+              <Button size="small" onClick={load}>
+                重试
+              </Button>
+            }
+          />
+        )
+      ) : (
+        <>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              flexWrap: 'wrap',
+              marginBottom: 10,
+              fontSize: 12,
+              color: 'var(--text-secondary)',
+            }}
+          >
+            {sourceMeta ? (
+              <Tag color={sourceMeta.color} icon={sourceMeta.icon} style={{ margin: 0 }}>
+                {sourceMeta.text}
+              </Tag>
+            ) : null}
+            {data?.sink ? (
+              <Tag color="green" style={{ margin: 0 }} icon={<CloudServerOutlined />}>
+                目标 {data.sink.targetType}:{data.sink.targetTable || '—'}
+                {data.sink.writeMode === 'OVERWRITE' ? ' · 覆盖' : ' · 追加'}
+              </Tag>
+            ) : null}
+            <span>
+              返回 {data?.rows?.length || 0} 行 · 最多 200 行
+              {data?.truncated ? '（结果已截断）' : ''}
+            </span>
+            {data?.params?.length ? <span>参数 {data.params.length} 个</span> : null}
+            {data?.sink ? (
+              <span>映射 {data.sink.fieldMapping.length} 个字段 · 预览不写入目标表</span>
+            ) : null}
+            <span style={{ marginLeft: 'auto' }}>SQL 由后端生成</span>
+          </div>
+
+          <Table
+            size="small"
+            columns={tableColumns}
+            dataSource={records}
+            rowKey="__key"
+            pagination={false}
+            scroll={{ x: 'max-content', y: 420 }}
+            locale={{ emptyText: '没有满足条件的数据（0 行）' }}
+          />
+
+          {data?.displaySql ? (
+            <Collapse
+              ghost
+              size="small"
+              style={{ marginTop: 8 }}
+              items={[
+                {
+                  key: 'sql',
+                  label: <span style={{ fontSize: 12 }}>查看后端预览 SQL</span>,
+                  children: <pre className="sql-preview" style={{ maxHeight: 200 }}>{data.displaySql}</pre>,
+                },
+              ]}
+            />
+          ) : null}
+        </>
+      )}
     </Modal>
   );
 }

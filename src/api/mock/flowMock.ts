@@ -1,4 +1,4 @@
-import type { FlowDetail, FlowRun, FlowSummary } from '../../types';
+import type { FlowDetail, FlowRun, FlowSummary, NodeDataPreview } from '../../types';
 
 const FLOW_KEY = 'astryx.mock.flows';
 const RUN_KEY = 'astryx.mock.runs';
@@ -142,7 +142,20 @@ function seededFlows(): FlowDetail[] {
             label: 'sink_ads',
             kind: 'sink',
             color: '#E6F7EE',
-            config: {},
+            config: {
+              targetType: 'DORIS',
+              dataSourceId: null,
+              tableName: 'ads_city_summary',
+              writeMode: 'APPEND',
+              batchSize: 10000,
+              autoCreateTable: true,
+              watermarkColumn: null,
+              fieldMapping: [
+                { source: 'city', target: 'city', type: 'VARCHAR(64)' },
+                { source: 'sum_amt', target: 'sum_amt', type: 'DOUBLE' },
+                { source: 'cnt', target: 'cnt', type: 'BIGINT' },
+              ],
+            },
           },
         },
       ],
@@ -261,12 +274,14 @@ LEFT JOIN data_model.users AS b ON a.user_id = b.user_id`,
         },
         {
           nodeId: 'node_6',
+          nodeType: 'sink',
           nodeName: 'sink_ads',
-          status: 'SKIPPED',
-          rows: null,
-          durationMs: 1,
-          sql: '-- v1 未启用 Sink，跳过写入',
-          logs: ['[09:12:33] Sink 节点已跳过（v1 未启用）'],
+          status: 'SUCCESS',
+          rows: 312,
+          durationMs: 240,
+          targetTable: 'DORIS:ads_city_summary',
+          sql: '-- Sink → DORIS:ads_city_summary，Stream Load 写入 312 行（Mock 演示）',
+          logs: ['[09:12:33] Sink 写入完成，312 行（Mock 演示，未连接目标库）'],
         },
       ],
     },
@@ -548,4 +563,103 @@ export const flowMock = {
     runs.unshift(run);
     writeRuns(runs);
   },
+
+  previewData(flowId: string, nodeId: string, limit = 100): Promise<NodeDataPreview> {
+    const flow = readFlows().find((f) => f.id === flowId);
+    if (!flow) return Promise.reject(new Error('任务不存在'));
+    const node = flow.nodes.find((n) => n.id === nodeId);
+    if (!node) return Promise.reject(new Error(`节点不存在：${nodeId}`));
+    const cfg = node.data.config as { fields?: Array<{ name: string; type: string }> };
+    const columns = (cfg.fields || []).map((f) => ({ name: f.name, type: f.type }));
+    const sampleColumns = columns.length ? columns : [{ name: 'mock_column', type: 'VARCHAR' }];
+    const rowCount = Math.min(Math.max(limit, 1), 3);
+    return delay({
+      columns: sampleColumns,
+      rows: Array.from({ length: rowCount }, () => sampleColumns.map(() => '示例值')),
+      truncated: false,
+      source: 'MOCK',
+      sql: '',
+      displaySql: '-- Mock 模式未连接后端，展示占位数据',
+      params: [],
+    });
+  },
+
+  startRun(flowId: string): Promise<string> {
+    return mockExecute(flowId, null);
+  },
+
+  startNodeRun(flowId: string, nodeId: string): Promise<string> {
+    return mockExecute(flowId, nodeId);
+  },
+
+  getRun(runId: string): Promise<FlowRun> {
+    const run = readRuns().find((r) => r.id === runId);
+    return run
+      ? delay(JSON.parse(JSON.stringify(run)) as FlowRun)
+      : Promise.reject(new Error('执行记录不存在'));
+  },
+
+  nodeLogs(runId: string, nodeId: string) {
+    const run = readRuns().find((r) => r.id === runId);
+    const node = run?.nodes.find((n) => n.nodeId === nodeId);
+    if (!node) return Promise.reject(new Error('该节点没有执行记录'));
+    return delay({
+      sqlText: node.sql || null,
+      sqlParams: null,
+      list: node.logs.map((message) => ({ level: 'INFO', message })),
+    });
+  },
 };
+
+function mockExecute(flowId: string, nodeId: string | null): Promise<string> {
+  const flows = readFlows();
+  const flow = flows.find((f) => f.id === flowId);
+  if (!flow) return Promise.reject(new Error('任务不存在'));
+  const selected = nodeId ? flow.nodes.filter((n) => n.id === nodeId) : flow.nodes;
+  if (nodeId && !selected.length) return Promise.reject(new Error('节点不存在'));
+  const started = nowStr();
+  const nodes = selected.map((node, index) => {
+    const isSink = node.data.kind === 'sink';
+    const sink = node.data.config as { tableName?: string; targetType?: string };
+    const durationMs = 180 + Math.round(Math.random() * 800);
+    const rows = 500 + index * 137;
+    return {
+      nodeId: node.id,
+      nodeType: node.data.kind,
+      nodeName: node.data.label,
+      status: 'SUCCESS' as const,
+      rows,
+      durationMs,
+      targetTable: isSink ? `${sink.targetType || 'DORIS'}:${sink.tableName || ''}` : undefined,
+      sql: `-- Mock 执行：${node.data.label}`,
+      logs: [
+        `[${started}] ${node.data.label} 开始执行`,
+        isSink
+          ? `[${started}] Sink 写入完成，${rows} 行（Mock 演示，未连接目标库）`
+          : `[${started}] 执行完成，耗时 ${durationMs}ms`,
+      ],
+    };
+  });
+  const run: FlowRun = {
+    id: `R-${flowId}-${Date.now()}`,
+    flowId,
+    flowName: flow.name,
+    status: 'SUCCESS',
+    startTime: started,
+    endTime: nowStr(),
+    durationMs: nodes.reduce((sum, n) => sum + n.durationMs, 0),
+    trigger: 'MANUAL',
+    runType: nodeId ? 'NODE' : 'FULL',
+    targetNodeId: nodeId,
+    errMsg: null,
+    nodes,
+  };
+  const runs = readRuns();
+  runs.unshift(run);
+  writeRuns(runs);
+  flow.lastRunStatus = 'SUCCESS';
+  flow.lastRunTime = run.endTime || started;
+  flow.updateTime = run.endTime || started;
+  writeFlows(flows);
+  return delay(run.id, 260);
+}

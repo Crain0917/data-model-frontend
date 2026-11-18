@@ -1,33 +1,11 @@
 import { useEffect } from 'react';
 import { Button, Checkbox, Input, InputNumber, Select, Space, Switch } from 'antd';
-import {
-  CheckOutlined,
-  DeleteOutlined,
-  FormOutlined,
-  MinusOutlined,
-  PlusOutlined,
-  RightOutlined,
-  TableOutlined,
-  ThunderboltOutlined,
-} from '@ant-design/icons';
-import type { ConditionRow, FieldDef, FilterConfig } from '../../../types';
-import {
-  buildNodeSql,
-  conditionsSql,
-  findUpstream,
-  outputFields,
-  OPERATOR_OPTIONS,
-} from '../../../utils/dagUtils';
-import { NodeCommon, SectionTitle, WarningLine, fieldOptions, type PanelProps } from './common';
-
-const EMPTY_COND: ConditionRow = {
-  logic: 'AND',
-  indent: 0,
-  left: '',
-  op: 'EQ',
-  rightType: 'CONST',
-  right: '',
-};
+import { CheckOutlined, MinusOutlined, TableOutlined } from '@ant-design/icons';
+import type { FieldDef, FilterConfig } from '../../../types';
+import { findUpstream, outputFields } from '../../../utils/dagUtils';
+import { NodeCommon, SectionTitle, WarningLine, type PanelProps } from './common';
+import ConditionEditor from './ConditionEditor';
+import SqlPreview from './SqlPreview';
 
 export default function FilterPanel({
   node,
@@ -62,11 +40,7 @@ export default function FilterPanel({
   const updateSelect = (index: number, p: Partial<FilterConfig['select'][number]>) => {
     patch({ select: select.map((s, i) => (i === index ? { ...s, ...p } : s)) });
   };
-  const updateCond = (index: number, p: Partial<ConditionRow>) => {
-    patch({ conditions: (cfg.conditions || []).map((c, i) => (i === index ? { ...c, ...p } : c)) });
-  };
   const kept = select.filter((s) => s.keep);
-  const sql = buildNodeSql(node, nodes, edges, flowId);
 
   if (!upstream) {
     return (
@@ -168,158 +142,13 @@ export default function FilterPanel({
       </div>
 
       <div className="form-section">
-        <SectionTitle
-          extra={
-            <Button
-              size="small"
-              type="text"
-              icon={<PlusOutlined />}
-              onClick={() => patch({ conditions: [...(cfg.conditions || []), { ...EMPTY_COND }] })}
-            >
-              加条件
-            </Button>
-          }
-        >
-          Filter 条件
-        </SectionTitle>
-        {(cfg.conditions || []).length === 0 ? (
-          <div className="form-hint">暂无过滤条件，将扫描全部行。</div>
-        ) : (
-          (cfg.conditions || []).map((cond, index) => (
-            <div
-              key={index}
-              style={{
-                border: '1px solid var(--border)',
-                borderRadius: 8,
-                padding: 8,
-                marginBottom: 8,
-                background: 'var(--bg-subtle)',
-              }}
-            >
-              <div style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
-                {index > 0 ? (
-                  <Select
-                    size="small"
-                    value={cond.logic}
-                    style={{ width: 58 }}
-                    onChange={(v) => updateCond(index, { logic: v })}
-                    options={[
-                      { value: 'AND', label: 'AND' },
-                      { value: 'OR', label: 'OR' },
-                    ]}
-                  />
-                ) : (
-                  <span style={{ width: 58, fontSize: 11, color: 'var(--text-tertiary)' }}>WHERE</span>
-                )}
-                <Select
-                  size="small"
-                  showSearch
-                  value={cond.left || undefined}
-                  placeholder="字段"
-                  style={{ flex: 1, minWidth: 0 }}
-                  options={fieldOptions(upFields)}
-                  onChange={(v) => updateCond(index, { left: v })}
-                />
-                <Select
-                  size="small"
-                  value={cond.op}
-                  style={{ width: 104 }}
-                  options={OPERATOR_OPTIONS}
-                  onChange={(v) =>
-                    updateCond(index, {
-                      op: v,
-                      rightType: v === 'IS_NULL' || v === 'IS_NOT_NULL' ? 'CONST' : cond.rightType,
-                    })
-                  }
-                />
-                <Button
-                  size="small"
-                  type="text"
-                  danger
-                  icon={<DeleteOutlined />}
-                  onClick={() => patch({ conditions: (cfg.conditions || []).filter((_, i) => i !== index) })}
-                />
-              </div>
-              <div style={{ display: 'flex', gap: 5, alignItems: 'center', marginTop: 6 }}>
-                <span style={{ width: 58 }} />
-                <Select
-                  size="small"
-                  value={cond.rightType}
-                  style={{ width: 76 }}
-                  onChange={(v) => updateCond(index, { rightType: v, right: '' })}
-                  disabled={cond.op === 'IS_NULL' || cond.op === 'IS_NOT_NULL'}
-                  options={[
-                    { value: 'CONST', label: '常量' },
-                    { value: 'FIELD', label: '字段' },
-                  ]}
-                />
-                {cond.rightType === 'FIELD' ? (
-                  <Select
-                    size="small"
-                    showSearch
-                    value={cond.right || undefined}
-                    placeholder="右字段"
-                    style={{ flex: 1, minWidth: 0 }}
-                    options={fieldOptions(upFields)}
-                    onChange={(v) => updateCond(index, { right: v })}
-                  />
-                ) : (
-                  <>
-                    <Input
-                      size="small"
-                      value={cond.right}
-                      placeholder={
-                        cond.op === 'IN' || cond.op === 'NOT_IN'
-                          ? '1,2,3'
-                          : cond.op === 'BETWEEN' || cond.op === 'NOT_BETWEEN'
-                            ? '起始值'
-                            : '值'
-                      }
-                      disabled={cond.op === 'IS_NULL' || cond.op === 'IS_NOT_NULL'}
-                      onChange={(e) => updateCond(index, { right: e.target.value })}
-                      style={{ flex: 1, minWidth: 0 }}
-                    />
-                    {cond.op === 'BETWEEN' || cond.op === 'NOT_BETWEEN' ? (
-                      <Input
-                        size="small"
-                        value={cond.right2 || ''}
-                        placeholder="结束值"
-                        onChange={(e) => updateCond(index, { right2: e.target.value })}
-                        style={{ flex: 1, minWidth: 0 }}
-                      />
-                    ) : null}
-                  </>
-                )}
-                <div style={{ display: 'flex' }}>
-                  <Button
-                    size="small"
-                    type="text"
-                    icon={<RightOutlined rotate={90} />}
-                    title="缩进（升组）"
-                    onClick={() => updateCond(index, { indent: Math.min(3, (cond.indent || 0) + 1) })}
-                  />
-                  <Button
-                    size="small"
-                    type="text"
-                    icon={<RightOutlined rotate={-90} />}
-                    title="反缩进（降组）"
-                    onClick={() => updateCond(index, { indent: Math.max(0, (cond.indent || 0) - 1) })}
-                  />
-                </div>
-              </div>
-              {cond.indent > 0 ? (
-                <div className="form-hint" style={{ marginTop: 4 }}>
-                  层级 {cond.indent}，按层级加括号
-                </div>
-              ) : null}
-            </div>
-          ))
-        )}
-        {(cfg.conditions || []).length > 0 ? (
-          <div className="form-hint mono" style={{ whiteSpace: 'pre-wrap', marginTop: 6 }}>
-            {conditionsSql(cfg.conditions, cfg.alias || 'a')}
-          </div>
-        ) : null}
+        <SectionTitle>Filter 条件</SectionTitle>
+        <ConditionEditor
+          conditions={cfg.conditions || []}
+          fields={upFields}
+          alias={cfg.alias || 'a'}
+          onChange={(conditions) => patch({ conditions })}
+        />
       </div>
 
       <div className="form-section">
@@ -355,20 +184,12 @@ export default function FilterPanel({
       </div>
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        <Button icon={<FormOutlined />} onClick={() => onPreviewSql(sql)}>
-          预览 SQL
-        </Button>
         <Button icon={<TableOutlined />} onClick={() => onPreviewData(outputFields(node, nodes, edges))}>
           预览数据
         </Button>
       </div>
 
-      <div style={{ marginTop: 12 }}>
-        <div className="form-hint" style={{ marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-          <ThunderboltOutlined /> 生成 SQL 预览
-        </div>
-        <pre className="sql-preview" style={{ maxHeight: 220 }}>{sql}</pre>
-      </div>
+      <SqlPreview node={node} nodes={nodes} edges={edges} flowId={flowId} onPreviewSql={onPreviewSql} />
       <div className="form-hint" style={{ marginTop: 8 }}>
         <CheckOutlined style={{ color: 'var(--success)' }} /> 条件行按层级生成括号；STARTS_WITH / ENDS_WITH /
         CONTAINS 自动转换为 LIKE。

@@ -1,6 +1,13 @@
 import type { ReactNode } from 'react';
 import { Input } from 'antd';
-import type { AnyNodeConfig, DataSource, FieldDef, FlowEdge, FlowNode } from '../../../types';
+import type {
+  AnyNodeConfig,
+  DataSource,
+  FieldDef,
+  FlowEdge,
+  FlowNode,
+  FlowRun,
+} from '../../../types';
 import { NODE_COLORS } from '../../../utils/nodeMeta';
 
 export interface PanelProps {
@@ -15,6 +22,8 @@ export interface PanelProps {
   onPreviewData: (fields: FieldDef[]) => void;
   onSwapInputs?: () => void;
   dataSources: DataSource[];
+  lastRun?: FlowRun | null;
+  onRetryNode?: (nodeId: string) => void;
 }
 
 export function SectionTitle({ children, extra }: { children: ReactNode; extra?: ReactNode }) {

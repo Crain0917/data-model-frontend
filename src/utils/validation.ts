@@ -1,6 +1,23 @@
 import type { FlowEdge, FlowNode, FlowNodeKind } from '../types';
+import { findUpstream, outputFields } from './dagUtils';
 
-const SINGLE_INPUT: FlowNodeKind[] = ['filter', 'groupBy', 'sink'];
+const SINGLE_INPUT: FlowNodeKind[] = ['filter', 'convert', 'calculator', 'formula', 'groupBy', 'sink'];
+
+const CALC_TERNARY = ['ADD3', 'MULTIPLY3'];
+const FORMULA_AGGREGATES =
+  /\b(COUNT|AVG|MIN|MAX|GROUP_CONCAT|STDDEV\w*|VARIANCE|VAR_\w+|APPROX_COUNT_DISTINCT|PERCENTILE\w*|MEDIAN)\s*\(/i;
+
+const KIND_LABEL: Partial<Record<FlowNodeKind, string>> = {
+  source: 'Source',
+  filter: 'Filter',
+  convert: '类型转换',
+  calculator: '计算器',
+  formula: '公式',
+  groupBy: 'Group By',
+  join: 'Join',
+  union: 'Union',
+  sink: 'Sink',
+};
 
 export function wouldCreateCycle(source: string, target: string, edges: FlowEdge[]): boolean {
   if (source === target) return true;
@@ -86,13 +103,110 @@ export function validateConnection(
     }
   }
   if (SINGLE_INPUT.includes(target.data.kind) && incoming.length >= 1) {
-    const label = target.data.kind === 'groupBy' ? 'Group By' : target.data.kind === 'filter' ? 'Filter' : 'Sink';
+    const label = KIND_LABEL[target.data.kind] || '该节点';
     return { ok: false, reason: `${label} 只允许 1 条入线` };
   }
   if (wouldCreateCycle(sourceId, targetId, edges)) {
     return { ok: false, reason: '该连线会形成环路，已阻止' };
   }
   return { ok: true };
+}
+
+function upstreamNameSet(node: FlowNode, nodes: FlowNode[], edges: FlowEdge[]): Set<string> {
+  const upstream = findUpstream(node.id, nodes, edges);
+  const fields = upstream ? outputFields(upstream, nodes, edges) : [];
+  return new Set(fields.map((f) => f.name.toLowerCase()));
+}
+
+function calculatorIssues(
+  cfg: Record<string, any>,
+  node: FlowNode,
+  nodes: FlowNode[],
+  edges: FlowEdge[],
+): string[] {
+  const rows = ((cfg.calculations || []) as Array<Record<string, any>>).filter(
+    (r) =>
+      String(r.output || '').trim() ||
+      String(r.fieldA || '').trim() ||
+      String(r.fieldB || '').trim() ||
+      String(r.fieldC || '').trim(),
+  );
+  const complete = rows.filter((r) => {
+    const op = String(r.operation || '').toUpperCase();
+    return (
+      String(r.output || '').trim() &&
+      op &&
+      String(r.fieldA || '').trim() &&
+      String(r.fieldB || '').trim() &&
+      (!CALC_TERNARY.includes(op) || String(r.fieldC || '').trim())
+    );
+  });
+  const issues: string[] = [];
+  if (!complete.length) issues.push('尚未配置任何计算');
+  else if (complete.length < rows.length) issues.push('存在未完成的计算行');
+  const upNames = upstreamNameSet(node, nodes, edges);
+  const outs = complete.map((r) => String(r.output).trim());
+  const dup = [
+    ...new Set(
+      outs.filter(
+        (o, i) =>
+          outs.findIndex((x) => x.toLowerCase() === o.toLowerCase()) !== i ||
+          upNames.has(o.toLowerCase()),
+      ),
+    ),
+  ];
+  if (dup.length) issues.push(`计算输出字段重名：${dup.join('、')}`);
+  return issues;
+}
+
+function formulaIssues(
+  cfg: Record<string, any>,
+  node: FlowNode,
+  nodes: FlowNode[],
+  edges: FlowEdge[],
+): string[] {
+  const rows = ((cfg.formulas || []) as Array<Record<string, any>>).filter(
+    (r) => String(r.output || '').trim() || String(r.expression || '').trim(),
+  );
+  const complete = rows.filter(
+    (r) => String(r.output || '').trim() && String(r.expression || '').trim(),
+  );
+  const issues: string[] = [];
+  if (!complete.length) issues.push('尚未配置任何公式');
+  else if (rows.some((r) => String(r.output || '').trim() && !String(r.expression || '').trim())) {
+    issues.push('存在空表达式');
+  }
+  const upNames = upstreamNameSet(node, nodes, edges);
+  const outs = complete.map((r) => String(r.output).trim());
+  const dup = [
+    ...new Set(
+      outs.filter(
+        (o, i) =>
+          outs.findIndex((x) => x.toLowerCase() === o.toLowerCase()) !== i ||
+          upNames.has(o.toLowerCase()),
+      ),
+    ),
+  ];
+  if (dup.length) issues.push(`公式输出字段重名：${dup.join('、')}`);
+  const refs = new Set<string>();
+  complete.forEach((r) => {
+    const re = /\[([^\]]+)\]/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(String(r.expression)))) {
+      const name = m[1].trim();
+      if (name) refs.add(name);
+    }
+  });
+  const unknown = [...refs].filter((name) => !upNames.has(name.toLowerCase()));
+  if (unknown.length) issues.push(`公式引用了不存在的字段：${unknown.join('、')}`);
+  for (const row of complete) {
+    const m = String(row.expression).match(FORMULA_AGGREGATES);
+    if (m) {
+      issues.push(`公式不支持聚合函数：${m[1].toUpperCase()}`);
+      break;
+    }
+  }
+  return issues;
 }
 
 export function dagWarnings(nodes: FlowNode[], edges: FlowEdge[]): string[] {
@@ -104,6 +218,26 @@ export function dagWarnings(nodes: FlowNode[], edges: FlowEdge[]): string[] {
     if (node.data.kind === 'join') {
       if (incoming.length !== 2) warnings.push(`节点「${node.data.label}」需要恰好 2 条入线（当前 ${incoming.length} 条）`);
       if (!(cfg.keys || []).length) warnings.push(`节点「${node.data.label}」Join 至少需要 1 个等值 Key`);
+    }
+    if (node.data.kind === 'convert') {
+      const rows = ((cfg.conversions || []) as Array<{ field?: string; targetType?: string; remove?: boolean }>)
+        .filter((r) => r.field);
+      const configured = rows.filter((r) => r.remove || String(r.targetType || '').trim());
+      if (!configured.length) {
+        warnings.push(`节点「${node.data.label}」尚未配置任何类型转换`);
+      } else if (rows.some((r) => !r.remove && !String(r.targetType || '').trim())) {
+        warnings.push(`节点「${node.data.label}」存在未选择目标类型的字段`);
+      }
+    }
+    if (node.data.kind === 'calculator') {
+      for (const issue of calculatorIssues(cfg, node, nodes, edges)) {
+        warnings.push(`节点「${node.data.label}」${issue}`);
+      }
+    }
+    if (node.data.kind === 'formula') {
+      for (const issue of formulaIssues(cfg, node, nodes, edges)) {
+        warnings.push(`节点「${node.data.label}」${issue}`);
+      }
     }
     if (node.data.kind === 'groupBy' && !cfg.globalAgg && !(cfg.groups || []).length) {
       warnings.push(`节点「${node.data.label}」未配置分组字段，且未开启全局聚合`);
@@ -131,6 +265,22 @@ export function nodeWarning(node: FlowNode, nodes: FlowNode[], edges: FlowEdge[]
       if (incoming.length !== 2) return `需要恰好 2 条入线（当前 ${incoming.length} 条）`;
       if (!(cfg.keys || []).length) return 'Join 至少需要 1 个等值 Key';
       return null;
+    case 'convert': {
+      const rows = ((cfg.conversions || []) as Array<{ field?: string; targetType?: string; remove?: boolean }>)
+        .filter((r) => r.field);
+      const configured = rows.filter((r) => r.remove || String(r.targetType || '').trim());
+      if (!configured.length) return '尚未配置任何类型转换';
+      if (rows.some((r) => !r.remove && !String(r.targetType || '').trim())) return '存在未选择目标类型的字段';
+      return null;
+    }
+    case 'calculator': {
+      const issues = calculatorIssues(cfg, node, nodes, edges);
+      return issues.length ? issues[0] : null;
+    }
+    case 'formula': {
+      const issues = formulaIssues(cfg, node, nodes, edges);
+      return issues.length ? issues[0] : null;
+    }
     case 'groupBy':
       if (!cfg.globalAgg && !(cfg.groups || []).length) return '未配置分组字段';
       return null;

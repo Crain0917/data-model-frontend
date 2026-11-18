@@ -23,13 +23,52 @@ const DEFAULT_PORTS: Record<DataSourceType, number> = {
   MYSQL: 3306,
   DORIS: 9030,
   DM8: 5236,
+  ORACLE: 1521,
 };
 
 const TYPE_LABEL: Record<DataSourceType, string> = {
   MYSQL: 'MySQL',
   DORIS: 'Doris',
   DM8: '达梦 DM8',
+  ORACLE: 'Oracle',
 };
+
+function parseExtraParams(raw?: string): Record<string, unknown> | null {
+  if (!raw || !raw.trim()) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // 非法 JSON 由表单校验拦截
+  }
+  return null;
+}
+
+function readHttpPort(raw?: string): number | null {
+  const parsed = parseExtraParams(raw);
+  const value = parsed?.httpPort;
+  if (value == null) return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 1 && n <= 65535 ? n : null;
+}
+
+/** 把 Stream Load HTTP 端口合入 extraParams；不填则删除该键，保留其他参数。 */
+function mergeHttpPort(raw: string | undefined, httpPort: number | null | undefined, isDoris: boolean) {
+  const parsed = parseExtraParams(raw);
+  if (!parsed) return raw;
+  if (isDoris) {
+    if (httpPort != null && Number.isFinite(Number(httpPort))) {
+      parsed.httpPort = Number(httpPort);
+    } else {
+      delete parsed.httpPort;
+    }
+  } else {
+    delete parsed.httpPort;
+  }
+  return Object.keys(parsed).length ? JSON.stringify(parsed) : undefined;
+}
 
 interface Props {
   open: boolean;
@@ -46,6 +85,8 @@ export default function DataSourceDrawer({ open, record, onClose, onSaved }: Pro
   const [testResult, setTestResult] = useState<TestConnectionResult | null>(null);
   const [dirty, setDirty] = useState(false);
   const typeRef = useRef<DataSourceType>('DORIS');
+  const formType = Form.useWatch('type', form) as DataSourceType | undefined;
+  const showHttpPort = (formType ?? record?.type ?? 'DORIS') === 'DORIS';
   const isEdit = Boolean(record?.id);
 
   useEffect(() => {
@@ -63,12 +104,13 @@ export default function DataSourceDrawer({ open, record, onClose, onSaved }: Pro
         username: record.username || '',
         password: '',
         extraParams: record.extraParams || '',
+        httpPort: record.type === 'DORIS' ? readHttpPort(record.extraParams) : null,
         remark: record.remark || '',
       });
     } else {
       typeRef.current = 'DORIS';
       form.resetFields();
-      form.setFieldsValue({ type: 'DORIS', port: DEFAULT_PORTS.DORIS });
+      form.setFieldsValue({ type: 'DORIS', port: DEFAULT_PORTS.DORIS, httpPort: null });
     }
   }, [open, record, form]);
 
@@ -83,7 +125,11 @@ export default function DataSourceDrawer({ open, record, onClose, onSaved }: Pro
     setTestResult(null);
     let id = record?.id;
     try {
-      const payload = { ...values } as DataSourceFormValues;
+      const { httpPort, ...rest } = values;
+      const payload: DataSourceFormValues = {
+        ...rest,
+        extraParams: mergeHttpPort(values.extraParams, httpPort, values.type === 'DORIS'),
+      };
       if (isEdit && !payload.password) delete payload.password;
       if (id) {
         await updateDataSource(id, payload);
@@ -253,6 +299,18 @@ export default function DataSourceDrawer({ open, record, onClose, onSaved }: Pro
             <InputNumber style={{ width: '100%' }} placeholder="9030" />
           </Form.Item>
         </div>
+
+        {showHttpPort ? (
+          <Form.Item
+            name="httpPort"
+            label="Stream Load HTTP 端口（可选）"
+            tooltip="保存到数据源额外参数 extraParams.httpPort，供 Doris Sink 的 Stream Load 使用"
+            extra="留空则：与平台内置 Doris 一致时用 8040，否则按查询端口 - 1000（默认 8030）。"
+            rules={[{ type: 'number', min: 1, max: 65535, message: '端口需为 1–65535 之间的整数' }]}
+          >
+            <InputNumber style={{ width: '100%' }} placeholder="8040" min={1} max={65535} />
+          </Form.Item>
+        ) : null}
 
         <Form.Item
           name="dbName"

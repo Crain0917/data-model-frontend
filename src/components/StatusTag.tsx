@@ -7,6 +7,7 @@ const MAP: Record<string, { text: string; cls: string }> = {
   RUNNING: { text: '运行中', cls: 'chip--info' },
   SKIPPED: { text: '跳过', cls: '' },
   WAITING: { text: '等待', cls: '' },
+  PENDING: { text: '排队中', cls: '' },
 };
 
 export function StatusTag({ status }: { status?: RunStatus | string | null }) {

@@ -20,6 +20,8 @@ export default function AppLayout() {
   const { mode, toggle } = useTheme();
   const location = useLocation();
   const flush = location.pathname.endsWith('/editor');
+  const workspace = location.pathname === '/data-source' || location.pathname === '/logs';
+  const pageClass = flush ? 'page page--flush' : workspace ? 'page page--workspace' : 'page';
 
   return (
     <div className="app-shell">
@@ -64,7 +66,7 @@ export default function AppLayout() {
       </aside>
 
       <main className="app-main">
-        <div className={flush ? 'page page--flush' : 'page'}>
+        <div className={pageClass}>
           <Outlet />
         </div>
       </main>

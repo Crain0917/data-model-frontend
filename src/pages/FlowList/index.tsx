@@ -14,27 +14,28 @@ import {
   DeleteOutlined,
   EditOutlined,
   EllipsisOutlined,
-  ExclamationCircleOutlined,
   PartitionOutlined,
   PlusOutlined,
   SearchOutlined,
   ThunderboltFilled,
 } from '@ant-design/icons';
-import { createFlow, deleteFlow, duplicateFlow, listFlows, updateFlowMeta } from '../../api/flow';
-import type { FlowSummary } from '../../types';
+import { createFlow, duplicateFlow, listFlows } from '../../api/flow';
+import type { FlowDeleteResult, FlowSummary } from '../../types';
 import { StatusTag } from '../../components/StatusTag';
 import EmptyState from '../../components/EmptyState';
+import EditFlowModal from '../../components/EditFlowModal';
+import DeleteFlowModal from '../../components/DeleteFlowModal';
 
 export default function FlowListPage() {
   const navigate = useNavigate();
-  const { message, modal } = App.useApp();
+  const { message } = App.useApp();
   const [flows, setFlows] = useState<FlowSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [keyword, setKeyword] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
-  const [renaming, setRenaming] = useState<FlowSummary | null>(null);
+  const [editing, setEditing] = useState<FlowSummary | null>(null);
+  const [deleting, setDeleting] = useState<FlowSummary | null>(null);
   const [createForm] = Form.useForm<{ name: string; description: string }>();
-  const [renameForm] = Form.useForm<{ name: string; description: string }>();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -68,36 +69,33 @@ export default function FlowListPage() {
     navigate(`/flow/${flow.id}/editor`);
   };
 
-  const submitRename = async () => {
-    if (!renaming) return;
-    const values = await renameForm.validateFields();
-    await updateFlowMeta(renaming.id, { name: values.name.trim(), description: values.description?.trim() || '' });
-    message.success('任务信息已更新');
-    setRenaming(null);
-    load();
-  };
-
-  const remove = (flow: FlowSummary) => {
-    modal.confirm({
-      title: `删除任务「${flow.name}」？`,
-      icon: <ExclamationCircleOutlined style={{ color: 'var(--danger)' }} />,
-      content: '任务的画布、配置与执行记录将一并删除。该操作不可撤销。',
-      okText: '删除',
-      okButtonProps: { danger: true },
-      cancelText: '取消',
-      onOk: async () => {
-        await deleteFlow(flow.id);
-        message.success('任务已删除');
-        load();
-      },
-    });
+  const onDeleted = (result: FlowDeleteResult) => {
+    if (result.failedTables?.length) {
+      message.warning(
+        `任务已删除，但 ${result.failedTables.length} 张节点表删除失败：${result.failedTables
+          .map((t) => t.dorisTable)
+          .join('、')}`,
+        6,
+      );
+    } else {
+      message.success(
+        result.deletedTables?.length
+          ? `任务已删除，Doris 表清理 ${result.deletedTables.length} 张`
+          : '任务已删除',
+      );
+    }
+    setFlows((prev) => prev.filter((f) => f.id !== deleting?.id));
+    void load();
   };
 
   const copy = async (flow: FlowSummary) => {
-    const item = await duplicateFlow(flow.id);
-    message.success('任务已复制');
-    load();
-    void item;
+    try {
+      await duplicateFlow(flow.id);
+      message.success('任务已复制');
+      load();
+    } catch (e) {
+      message.error((e as Error).message || '复制失败');
+    }
   };
 
   return (
@@ -178,19 +176,30 @@ export default function FlowListPage() {
                         key: 'rename',
                         icon: <EditOutlined />,
                         label: '编辑信息',
-                        onClick: () => {
-                          renameForm.setFieldsValue({ name: flow.name, description: flow.description });
-                          setRenaming(flow);
+                        onClick: (info) => {
+                          info.domEvent.stopPropagation();
+                          setEditing(flow);
                         },
                       },
-                      { key: 'copy', icon: <CopyOutlined />, label: '复制任务', onClick: () => copy(flow) },
+                      {
+                        key: 'copy',
+                        icon: <CopyOutlined />,
+                        label: '复制任务',
+                        onClick: (info) => {
+                          info.domEvent.stopPropagation();
+                          copy(flow);
+                        },
+                      },
                       { type: 'divider' },
                       {
                         key: 'delete',
                         icon: <DeleteOutlined />,
                         label: '删除任务',
                         danger: true,
-                        onClick: () => remove(flow),
+                        onClick: (info) => {
+                          info.domEvent.stopPropagation();
+                          setDeleting(flow);
+                        },
                       },
                     ],
                   }}
@@ -240,18 +249,18 @@ export default function FlowListPage() {
         cancelText="取消"
         onCancel={() => setCreateOpen(false)}
         onOk={submitCreate}
-        destroyOnHidden
+        forceRender
       >
         <Form form={createForm} layout="vertical" style={{ marginTop: 16 }}>
           <Form.Item
             name="name"
             label="任务名称"
             rules={[
-              { required: true, message: '请输入任务名称' },
-              { max: 50, message: '任务名称不能超过 50 个字符' },
+              { required: true, whitespace: true, message: '请输入任务名称' },
+              { min: 2, max: 100, message: '任务名称需为 2–100 个字符' },
             ]}
           >
-            <Input placeholder="如 订单清洗与城市汇总" autoFocus />
+            <Input placeholder="如 订单清洗与城市汇总" maxLength={100} autoFocus />
           </Form.Item>
           <Form.Item name="description" label="描述">
             <Input.TextArea rows={3} maxLength={200} showCount placeholder="一句话说明这个任务做什么" />
@@ -259,31 +268,33 @@ export default function FlowListPage() {
         </Form>
       </Modal>
 
-      <Modal
-        open={Boolean(renaming)}
-        title="编辑任务信息"
-        okText="保存"
-        cancelText="取消"
-        onCancel={() => setRenaming(null)}
-        onOk={submitRename}
-        destroyOnHidden
-      >
-        <Form form={renameForm} layout="vertical" style={{ marginTop: 16 }}>
-          <Form.Item
-            name="name"
-            label="任务名称"
-            rules={[
-              { required: true, message: '请输入任务名称' },
-              { max: 50, message: '任务名称不能超过 50 个字符' },
-            ]}
-          >
-            <Input />
-          </Form.Item>
-          <Form.Item name="description" label="描述">
-            <Input.TextArea rows={3} maxLength={200} showCount />
-          </Form.Item>
-        </Form>
-      </Modal>
+      <EditFlowModal
+        open={Boolean(editing)}
+        flow={editing}
+        onClose={() => setEditing(null)}
+        onSaved={(result) => {
+          setFlows((prev) =>
+            prev.map((f) =>
+              f.id === result.id
+                ? {
+                    ...f,
+                    name: result.name,
+                    description: result.description,
+                    updateTime: result.updateTime || f.updateTime,
+                  }
+                : f,
+            ),
+          );
+        }}
+      />
+
+      <DeleteFlowModal
+        open={Boolean(deleting)}
+        flow={deleting}
+        onClose={() => setDeleting(null)}
+        onDeleted={onDeleted}
+      />
+
     </div>
   );
 }

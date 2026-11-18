@@ -2,13 +2,13 @@ import { useEffect } from 'react';
 import { Button, Input, Radio, Select, Switch } from 'antd';
 import {
   DeleteOutlined,
-  FormOutlined,
   PlusOutlined,
   TableOutlined,
 } from '@ant-design/icons';
 import type { FieldDef, UnionConfig } from '../../../types';
-import { buildNodeSql, outputFields } from '../../../utils/dagUtils';
+import { outputFields } from '../../../utils/dagUtils';
 import { DangerLine, NodeCommon, SectionTitle, WarningLine, fieldOptions, type PanelProps } from './common';
+import SqlPreview from './SqlPreview';
 
 const WIDE: Record<string, number> = { VARCHAR: 5, DECIMAL: 4, DOUBLE: 3, BIGINT: 2, INT: 1 };
 
@@ -39,7 +39,6 @@ export default function UnionPanel({
     fields: outputFields(n, nodes, edges),
   }));
   const targets = cfg.targets || [];
-  const sql = buildNodeSql(node, nodes, edges, flowId);
 
   const streamKey = streams.map((s) => `${s.node.id}:${s.fields.length}`).join('|');
   useEffect(() => {
@@ -283,18 +282,12 @@ export default function UnionPanel({
       )}
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        <Button icon={<FormOutlined />} onClick={() => onPreviewSql(sql)}>
-          预览 SQL
-        </Button>
         <Button icon={<TableOutlined />} onClick={() => onPreviewData(outputFields(node, nodes, edges))}>
           预览数据
         </Button>
       </div>
 
-      <div style={{ marginTop: 12 }}>
-        <div className="form-hint" style={{ marginBottom: 6 }}>生成 SQL 预览</div>
-        <pre className="sql-preview" style={{ maxHeight: 220 }}>{sql}</pre>
-      </div>
+      <SqlPreview node={node} nodes={nodes} edges={edges} flowId={flowId} onPreviewSql={onPreviewSql} />
     </div>
   );
 }

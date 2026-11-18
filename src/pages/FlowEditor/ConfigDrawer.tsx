@@ -1,13 +1,17 @@
 import { useState } from 'react';
 import { App, Button } from 'antd';
 import { CloseOutlined, DeleteOutlined } from '@ant-design/icons';
-import type { DataSource, FieldDef, FlowEdge, FlowNode } from '../../types';
+import type { DataSource, FieldDef, FlowEdge, FlowNode, FlowRun } from '../../types';
 import { NODE_META } from '../../utils/nodeMeta';
+import { toDagJson } from '../../utils/dagJson';
 import { useFlowStore } from './store';
 import SqlModal from '../../components/SqlModal';
 import PreviewModal from '../../components/PreviewModal';
 import SourcePanel from './panels/SourcePanel';
 import FilterPanel from './panels/FilterPanel';
+import ConvertPanel from './panels/ConvertPanel';
+import CalculatorPanel from './panels/CalculatorPanel';
+import FormulaPanel from './panels/FormulaPanel';
 import GroupByPanel from './panels/GroupByPanel';
 import JoinPanel from './panels/JoinPanel';
 import UnionPanel from './panels/UnionPanel';
@@ -18,9 +22,18 @@ interface Props {
   edges: FlowEdge[];
   flowId: string;
   dataSources: DataSource[];
+  lastRun?: FlowRun | null;
+  onRetryNode?: (nodeId: string) => void;
 }
 
-export default function ConfigDrawer({ nodes, edges, flowId, dataSources }: Props) {
+export default function ConfigDrawer({
+  nodes,
+  edges,
+  flowId,
+  dataSources,
+  lastRun,
+  onRetryNode,
+}: Props) {
   const { modal, message } = App.useApp();
   const selectedId = useFlowStore((s) => s.selectedNodeId);
   const setSelected = useFlowStore((s) => s.setSelected);
@@ -35,7 +48,13 @@ export default function ConfigDrawer({ nodes, edges, flowId, dataSources }: Prop
     sql: '',
     title: '',
   });
-  const [preview, setPreview] = useState<{ open: boolean; fields: FieldDef[]; title: string }>({
+  const [preview, setPreview] = useState<{
+    open: boolean;
+    fields: FieldDef[];
+    title: string;
+    nodeId?: string;
+    dagJson?: unknown;
+  }>({
     open: false,
     fields: [],
     title: '',
@@ -60,7 +79,13 @@ export default function ConfigDrawer({ nodes, edges, flowId, dataSources }: Prop
   };
   const onPreviewData = (fields: FieldDef[]) => {
     if (!node) return;
-    setPreview({ open: true, fields, title: `${node.data.label} · 数据预览` });
+    setPreview({
+      open: true,
+      fields,
+      title: `${node.data.label} · 数据预览`,
+      nodeId: node.id,
+      dagJson: toDagJson(nodes, edges),
+    });
   };
 
   const remove = () => {
@@ -90,6 +115,8 @@ export default function ConfigDrawer({ nodes, edges, flowId, dataSources }: Prop
     onPreviewData,
     onSwapInputs: () => node && swapJoinInputs(node.id),
     dataSources,
+    lastRun,
+    onRetryNode,
   };
 
   return (
@@ -116,6 +143,9 @@ export default function ConfigDrawer({ nodes, edges, flowId, dataSources }: Prop
             <>
               {node.data.kind === 'source' ? <SourcePanel {...panelProps} /> : null}
               {node.data.kind === 'filter' ? <FilterPanel {...panelProps} /> : null}
+              {node.data.kind === 'convert' ? <ConvertPanel {...panelProps} /> : null}
+              {node.data.kind === 'calculator' ? <CalculatorPanel {...panelProps} /> : null}
+              {node.data.kind === 'formula' ? <FormulaPanel {...panelProps} /> : null}
               {node.data.kind === 'groupBy' ? <GroupByPanel {...panelProps} /> : null}
               {node.data.kind === 'join' ? <JoinPanel {...panelProps} /> : null}
               {node.data.kind === 'union' ? <UnionPanel {...panelProps} /> : null}
@@ -142,7 +172,10 @@ export default function ConfigDrawer({ nodes, edges, flowId, dataSources }: Prop
         open={preview.open}
         onClose={() => setPreview((s) => ({ ...s, open: false }))}
         title={preview.title}
-        columns={preview.fields}
+        flowId={flowId}
+        nodeId={preview.nodeId}
+        dagJson={preview.dagJson}
+        fallbackColumns={preview.fields}
       />
     </>
   );

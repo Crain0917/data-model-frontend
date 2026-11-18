@@ -1,0 +1,267 @@
+import { Button, Input, InputNumber, Select } from 'antd';
+import { DeleteOutlined, PlusOutlined, TableOutlined } from '@ant-design/icons';
+import type { FieldDef, FormulaConfig, FormulaReturnType, FormulaRow } from '../../../types';
+import { findUpstream, outputFields } from '../../../utils/dagUtils';
+import { DangerLine, NodeCommon, SectionTitle, WarningLine, fieldOptions, type PanelProps } from './common';
+import SqlPreview from './SqlPreview';
+
+const RETURN_TYPES: Array<{ value: FormulaReturnType; label: string }> = [
+  { value: 'DOUBLE', label: 'DOUBLE' },
+  { value: 'DECIMAL', label: 'DECIMAL(p,s)' },
+  { value: 'STRING', label: 'STRING' },
+  { value: 'BIGINT', label: 'BIGINT' },
+  { value: 'INT', label: 'INT' },
+];
+
+const GRID = '128px 260px 96px 58px 52px 96px 34px';
+const AGGREGATES = /\b(COUNT|AVG|MIN|MAX|GROUP_CONCAT|STDDEV\w*|VARIANCE|VAR_\w+|APPROX_COUNT_DISTINCT|PERCENTILE\w*|MEDIAN)\s*\(/i;
+
+function blankRow(): FormulaRow {
+  return {
+    output: '',
+    expression: '',
+    returnType: 'DOUBLE',
+    length: null,
+    precision: null,
+  };
+}
+
+function normalize(cfg: Partial<FormulaConfig>): FormulaConfig {
+  return {
+    alias: cfg.alias || 'a',
+    formulas: ((cfg.formulas || []) as FormulaRow[]).map((row) => ({
+      output: String(row.output || ''),
+      expression: String(row.expression || ''),
+      returnType: (String(row.returnType || 'DOUBLE').toUpperCase() as FormulaReturnType) || 'DOUBLE',
+      length: row.length ?? null,
+      precision: row.precision ?? null,
+    })),
+  };
+}
+
+function appendField(expression: string, field: string): string {
+  const expr = expression.trimEnd();
+  if (!expr) return `[${field}]`;
+  if (/[+\-*/%(,\[]$/.test(expr)) return `${expr}[${field}]`;
+  return `${expr} + [${field}]`;
+}
+
+export default function FormulaPanel({
+  node,
+  nodes,
+  edges,
+  flowId,
+  onConfig,
+  onMeta,
+  onPreviewSql,
+  onPreviewData,
+}: PanelProps) {
+  const cfg = normalize(node.data.config as Partial<FormulaConfig>);
+  const upstream = findUpstream(node.id, nodes, edges);
+  const upFields: FieldDef[] = upstream ? outputFields(upstream, nodes, edges) : [];
+  const rows = cfg.formulas;
+  const options = fieldOptions(upFields);
+
+  const patch = (p: Partial<FormulaConfig>) => onConfig({ ...cfg, ...p });
+  const updateRow = (index: number, p: Partial<FormulaRow>) => {
+    patch({ formulas: rows.map((row, i) => (i === index ? { ...row, ...p } : row)) });
+  };
+  const addRow = () => patch({ formulas: [...rows, blankRow()] });
+  const removeRow = (index: number) => patch({ formulas: rows.filter((_, i) => i !== index) });
+
+  const changeReturnType = (index: number, value: FormulaReturnType) => {
+    if (value === 'DECIMAL') {
+      updateRow(index, { returnType: value, length: rows[index].length ?? 18, precision: rows[index].precision ?? 2 });
+    } else if (value === 'STRING') {
+      updateRow(index, { returnType: value, length: rows[index].length ?? 255, precision: null });
+    } else {
+      updateRow(index, { returnType: value, length: null, precision: null });
+    }
+  };
+
+  const touched = rows.filter((r) => r.output.trim() || r.expression.trim());
+  const emptyExpression = touched.filter((r) => r.output.trim() && !r.expression.trim());
+  const complete = touched.filter((r) => r.output.trim() && r.expression.trim());
+  const badDecimal = rows.filter((r) => {
+    if (r.returnType !== 'DECIMAL') return false;
+    const p = r.length ?? 18;
+    const s = r.precision ?? 2;
+    return p < 1 || p > 38 || s < 0 || s > p;
+  });
+  const outs = complete.map((r) => r.output.trim().toLowerCase());
+  const upNames = upFields.map((f) => f.name.toLowerCase());
+  const duplicateOuts = [
+    ...new Set(outs.filter((name, i) => outs.indexOf(name) !== i || upNames.includes(name))),
+  ];
+  const refs = new Set<string>();
+  complete.forEach((row) => {
+    const re = /\[([^\]]+)\]/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(row.expression))) {
+      const name = m[1].trim();
+      if (name) refs.add(name);
+    }
+  });
+  const unknownRefs = [...refs].filter((name) => !upNames.includes(name.toLowerCase()));
+  const aggregate = complete.map((row) => row.expression.match(AGGREGATES)).find(Boolean);
+
+  if (!upstream) {
+    return (
+      <div>
+        <NodeCommon node={node} onMeta={onMeta} />
+        <WarningLine>请先连接上游节点，公式需要 1 条入线。</WarningLine>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <NodeCommon node={node} onMeta={onMeta} />
+
+      <div className="form-section">
+        <SectionTitle>输入流</SectionTitle>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <span className="form-hint">别名</span>
+          <Input
+            size="small"
+            value={cfg.alias}
+            style={{ width: 72 }}
+            onChange={(e) => patch({ alias: e.target.value || 'a' })}
+          />
+          <span className="form-hint" style={{ marginLeft: 4 }}>
+            上游：{upstream.data.label} · {upFields.length} 字段
+          </span>
+        </div>
+      </div>
+
+      <div className="form-section">
+        <SectionTitle
+          extra={
+            <Button size="small" type="text" icon={<PlusOutlined />} onClick={addRow}>
+              添加公式
+            </Button>
+          }
+        >
+          公式
+        </SectionTitle>
+
+        <div className="field-table" style={{ overflowX: 'auto' }}>
+          <div style={{ minWidth: 760 }}>
+            <div className="field-row field-row--head" style={{ gridTemplateColumns: GRID }}>
+              <span>输出字段名</span>
+              <span>表达式</span>
+              <span>返回类型</span>
+              <span>长度</span>
+              <span>精度</span>
+              <span>插入字段</span>
+              <span />
+            </div>
+            {rows.map((row, index) => {
+              const decimal = row.returnType === 'DECIMAL';
+              const isString = row.returnType === 'STRING';
+              return (
+                <div key={index} className="field-row" style={{ gridTemplateColumns: GRID, alignItems: 'start' }}>
+                  <Input
+                    size="small"
+                    value={row.output}
+                    placeholder="新字段名"
+                    onChange={(e) => updateRow(index, { output: e.target.value })}
+                  />
+                  <Input.TextArea
+                    size="small"
+                    value={row.expression}
+                    placeholder="[a]+[b]+[c]+[d]"
+                    autoSize={{ minRows: 1, maxRows: 4 }}
+                    onChange={(e) => updateRow(index, { expression: e.target.value })}
+                  />
+                  <Select
+                    size="small"
+                    value={row.returnType}
+                    style={{ width: '100%' }}
+                    options={RETURN_TYPES}
+                    onChange={(v) => changeReturnType(index, v)}
+                  />
+                  <InputNumber
+                    size="small"
+                    controls={false}
+                    min={1}
+                    max={isString ? 65535 : 38}
+                    value={row.length ?? undefined}
+                    placeholder={isString ? '255' : decimal ? '18' : '—'}
+                    style={{ width: '100%' }}
+                    disabled={!decimal && !isString}
+                    onChange={(v) => updateRow(index, { length: (v as number) ?? null })}
+                  />
+                  <InputNumber
+                    size="small"
+                    controls={false}
+                    min={0}
+                    max={decimal ? Number(row.length ?? 18) : 0}
+                    value={row.precision ?? undefined}
+                    placeholder={decimal ? '2' : '—'}
+                    style={{ width: '100%' }}
+                    disabled={!decimal}
+                    onChange={(v) => updateRow(index, { precision: (v as number) ?? null })}
+                  />
+                  <Select
+                    size="small"
+                    showSearch
+                    value={undefined}
+                    placeholder="插入字段"
+                    style={{ width: '100%' }}
+                    options={options}
+                    onChange={(v) =>
+                      updateRow(index, { expression: appendField(row.expression, String(v)) })
+                    }
+                  />
+                  <Button
+                    size="small"
+                    type="text"
+                    danger
+                    icon={<DeleteOutlined />}
+                    aria-label="删除公式行"
+                    onClick={() => removeRow(index)}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="form-hint" style={{ marginTop: 6, lineHeight: 1.7 }}>
+          用 <span className="mono">[字段名]</span> 引用上游字段；支持 + - * / %、括号、数字/字符串常量；
+          SUM(a,b,...) 为行内求和，不是分组聚合；不支持 COUNT/AVG/MIN/MAX 等聚合函数。
+          每个公式行在上游字段之后追加一个新字段，行数不变。
+        </div>
+        {!rows.length ? <WarningLine>尚未配置任何公式，节点将原样透传上游字段。</WarningLine> : null}
+        {emptyExpression.length ? (
+          <WarningLine>
+            存在空表达式：{emptyExpression.map((r) => r.output.trim()).join('、')}
+          </WarningLine>
+        ) : null}
+        {badDecimal.length ? (
+          <DangerLine>
+            DECIMAL 精度非法：{badDecimal.map((r) => r.output || '未命名').join('、')}（总位数 1–38，小数位 0–总位数）
+          </DangerLine>
+        ) : null}
+        {duplicateOuts.length ? (
+          <DangerLine>输出字段重名：{duplicateOuts.join('、')}，请修改输出字段名。</DangerLine>
+        ) : null}
+        {unknownRefs.length ? (
+          <DangerLine>公式引用了不存在的字段：{unknownRefs.join('、')}</DangerLine>
+        ) : null}
+        {aggregate ? (
+          <DangerLine>公式不支持聚合函数：{String(aggregate[1]).toUpperCase()}（公式为行级变换）</DangerLine>
+        ) : null}
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <Button icon={<TableOutlined />} onClick={() => onPreviewData(outputFields(node, nodes, edges))}>
+          预览数据
+        </Button>
+      </div>
+
+      <SqlPreview node={node} nodes={nodes} edges={edges} flowId={flowId} onPreviewSql={onPreviewSql} />
+    </div>
+  );
+}

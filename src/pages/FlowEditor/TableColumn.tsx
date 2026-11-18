@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Button, Input, Skeleton, Tooltip } from 'antd';
-import { PlusOutlined, ReloadOutlined, SearchOutlined, TableOutlined } from '@ant-design/icons';
+import { MenuFoldOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, TableOutlined } from '@ant-design/icons';
 import type { DataSource, TableInfo } from '../../types';
 
 interface Props {
@@ -10,9 +10,10 @@ interface Props {
   error: string | null;
   onRefresh: () => void;
   onAdd: (table: TableInfo) => void;
+  onCollapse: () => void;
 }
 
-export default function TableColumn({ dataSource, tables, loading, error, onRefresh, onAdd }: Props) {
+export default function TableColumn({ dataSource, tables, loading, error, onRefresh, onAdd, onCollapse }: Props) {
   const [keyword, setKeyword] = useState('');
   const filtered = useMemo(
     () => tables.filter((t) => (keyword ? t.tableName.toLowerCase().includes(keyword.toLowerCase()) : true)),
@@ -24,9 +25,14 @@ export default function TableColumn({ dataSource, tables, loading, error, onRefr
       <div className="col-head">
         <div className="col-title">
           <span>② 表（{dataSource?.name || '—'}）</span>
-          <Tooltip title="刷新表列表">
-            <Button type="text" size="small" icon={<ReloadOutlined />} onClick={onRefresh} loading={loading} />
-          </Tooltip>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <Tooltip title="刷新表列表">
+              <Button type="text" size="small" icon={<ReloadOutlined />} onClick={onRefresh} loading={loading} />
+            </Tooltip>
+            <Tooltip title="收起表侧栏">
+              <Button type="text" size="small" icon={<MenuFoldOutlined />} onClick={onCollapse} />
+            </Tooltip>
+          </span>
         </div>
         <Input
           size="small"

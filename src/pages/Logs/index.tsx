@@ -15,18 +15,29 @@ import {
   SyncOutlined,
 } from '@ant-design/icons';
 import dayjs, { type Dayjs } from 'dayjs';
-import type { FlowRun, FlowSummary, NodeRun, RunStatus } from '../../types';
-import { listFlows, listRuns } from '../../api/flow';
+import type { FlowRun, FlowSummary, NodeLogs, NodeRun, RunStatus } from '../../types';
+import { getNodeLogs, getRun, listFlows, listRuns, startNodeRun } from '../../api/flow';
 import { StatusTag } from '../../components/StatusTag';
 import EmptyState from '../../components/EmptyState';
 
 const WEEK_LABELS = ['一', '二', '三', '四', '五', '六', '日'];
+
+const FAIL_STAGE_LABEL: Record<string, string> = {
+  SOURCE_READ: '源库读取',
+  TYPE_MAPPING: '类型映射',
+  STREAM_LOAD: 'Stream Load 写入',
+  SINK_WRITE: 'Sink 写入',
+  DORIS_EXEC: 'Doris 计算',
+  VALIDATE: '行数校验',
+  OTHER: '执行',
+};
 
 function statusIcon(status: RunStatus, size = 13) {
   if (status === 'SUCCESS') return <CheckCircleFilled style={{ color: 'var(--success)', fontSize: size }} />;
   if (status === 'FAILED') return <CloseCircleFilled style={{ color: 'var(--danger)', fontSize: size }} />;
   if (status === 'RUNNING') return <SyncOutlined spin style={{ color: 'var(--info)', fontSize: size }} />;
   if (status === 'SKIPPED') return <MinusCircleFilled style={{ color: 'var(--text-tertiary)', fontSize: size }} />;
+  if (status === 'PENDING') return <ClockCircleOutlined style={{ color: 'var(--text-tertiary)', fontSize: size }} />;
   return <ClockCircleOutlined style={{ color: 'var(--text-tertiary)', fontSize: size }} />;
 }
 
@@ -60,6 +71,9 @@ export default function LogsPage() {
   const [selectedDate, setSelectedDate] = useState(dayjs().format('YYYY-MM-DD'));
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [runDetail, setRunDetail] = useState<FlowRun | null>(null);
+  const [nodeLog, setNodeLog] = useState<NodeLogs | null>(null);
+  const [nodeLogLoading, setNodeLogLoading] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -101,7 +115,11 @@ export default function LogsPage() {
   }, [scopedRuns]);
 
   const dayRuns = runsByDate.get(selectedDate) || [];
-  const selectedRun = runs.find((r) => r.id === selectedRunId) || dayRuns[0] || null;
+  const selectedRun =
+    (runDetail && runDetail.id === selectedRunId ? runDetail : null) ||
+    runs.find((r) => r.id === selectedRunId) ||
+    dayRuns[0] ||
+    null;
   const selectedNode: NodeRun | null =
     selectedRun?.nodes.find((n) => n.nodeId === selectedNodeId) ||
     selectedRun?.nodes.find((n) => n.status === 'FAILED') ||
@@ -109,11 +127,65 @@ export default function LogsPage() {
     null;
 
   useEffect(() => {
+    if (!selectedRunId) {
+      setRunDetail(null);
+      return;
+    }
+    let alive = true;
+    setRunDetail((prev) => (prev?.id === selectedRunId ? prev : null));
+    getRun(selectedRunId)
+      .then((detail) => {
+        if (alive) setRunDetail(detail);
+      })
+      .catch((e) => {
+        if (alive) message.error((e as Error).message || '执行详情加载失败');
+      });
+    return () => {
+      alive = false;
+    };
+  }, [selectedRunId, message]);
+
+  // 运行中的记录持续刷新，直到终态
+  useEffect(() => {
+    if (!runDetail || (runDetail.status !== 'RUNNING' && runDetail.status !== 'PENDING')) return;
+    const timer = window.setTimeout(() => {
+      getRun(runDetail.id)
+        .then(setRunDetail)
+        .catch(() => {
+          // 单次轮询失败不打断页面，下一次继续
+        });
+    }, 1500);
+    return () => window.clearTimeout(timer);
+  }, [runDetail]);
+
+  useEffect(() => {
     if (selectedRun) {
       const first = selectedRun.nodes.find((n) => n.status === 'FAILED') || selectedRun.nodes[0];
       setSelectedNodeId(first?.nodeId || null);
     }
   }, [selectedRunId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!selectedRun?.id || !selectedNodeId) {
+      setNodeLog(null);
+      return;
+    }
+    let alive = true;
+    setNodeLogLoading(true);
+    getNodeLogs(selectedRun.id, selectedNodeId)
+      .then((logs) => {
+        if (alive) setNodeLog(logs);
+      })
+      .catch(() => {
+        if (alive) setNodeLog(null);
+      })
+      .finally(() => {
+        if (alive) setNodeLogLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [selectedRun?.id, selectedNodeId]);
 
   const cells = useMemo(() => monthCells(month), [month]);
 
@@ -141,13 +213,46 @@ export default function LogsPage() {
     setSelectedRunId(list?.[0]?.id || null);
   };
 
-  const copySql = async () => {
-    if (!selectedNode?.sql) return;
+  const refreshRuns = async () => {
+    setLoading(true);
     try {
-      await navigator.clipboard.writeText(selectedNode.sql);
+      setRuns(await listRuns());
+    } catch (e) {
+      message.error((e as Error).message || '日志加载失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const nodeSql = nodeLog?.sqlText || selectedNode?.sql || '';
+
+  const copySql = async () => {
+    if (!nodeSql) return;
+    try {
+      await navigator.clipboard.writeText(nodeSql);
       message.success('SQL 已复制');
     } catch {
       message.error('复制失败，请手动选择文本');
+    }
+  };
+
+  const rerunNode = async () => {
+    if (!selectedRun || !selectedNode) return;
+    const isSink = selectedNode.nodeType === 'sink';
+    try {
+      const runId = await startNodeRun(selectedRun.flowId, selectedNode.nodeId, isSink);
+      message.success(
+        isSink
+          ? `已提交 Sink 续写（不重算上游）：run #${runId}`
+          : `已提交节点重跑：run #${runId}`,
+      );
+      setSelectedDate(dayjs().format('YYYY-MM-DD'));
+      setMonth(dayjs());
+      setSelectedRunId(runId);
+      setRunDetail(null);
+      void refreshRuns();
+    } catch (e) {
+      message.error((e as Error).message || '节点重跑失败');
     }
   };
 
@@ -160,29 +265,20 @@ export default function LogsPage() {
   ).length;
 
   return (
-    <div className="page">
-      <div className="page-header">
+    <div className="page-stack">
+      <div className="page-head">
         <div>
           <h1 className="page-title">任务日志</h1>
-          <p className="page-subtitle">按日期查看每次执行的状态、节点耗时与错误堆栈，快速定位失败节点。</p>
+          <p className="page-desc">按日期查看每次执行的状态、节点耗时与错误堆栈，快速定位失败节点。</p>
         </div>
-        <div className="page-actions">
+        <div className="toolbar">
           <Select
             value={flowFilter}
             style={{ width: 220 }}
             onChange={setFlowFilter}
             options={[{ value: 'all', label: '全部任务' }, ...flows.map((f) => ({ value: f.id, label: f.name }))]}
           />
-          <Button
-            icon={<ReloadOutlined />}
-            onClick={() => {
-              setLoading(true);
-              listRuns()
-                .then(setRuns)
-                .catch((e) => message.error((e as Error).message))
-                .finally(() => setLoading(false));
-            }}
-          >
+          <Button icon={<ReloadOutlined />} onClick={refreshRuns}>
             刷新
           </Button>
         </div>
@@ -282,7 +378,7 @@ export default function LogsPage() {
                   <div className="log-run-meta">
                     <span>{run.startTime.slice(11, 19)}</span>
                     <span>{durationText(run.durationMs)}</span>
-                    <span>{run.nodes.length} 个节点</span>
+                    {run.nodes.length ? <span>{run.nodes.length} 个节点</span> : null}
                     <span className="mini-tag">{run.trigger === 'MANUAL' ? '手动' : run.trigger === 'RETRY' ? '重试' : '调度'}</span>
                   </div>
                 </button>
@@ -355,13 +451,24 @@ export default function LogsPage() {
                           {statusIcon(selectedNode.status)}
                           <b>{selectedNode.nodeName}</b>
                           <span className="mini-tag">{selectedNode.nodeId}</span>
+                          {selectedNode.status === 'FAILED' && selectedNode.failStage ? (
+                            <span className="chip chip--danger">
+                              失败环节：{FAIL_STAGE_LABEL[selectedNode.failStage] || selectedNode.failStage}
+                            </span>
+                          ) : null}
+                          {selectedNode.targetTable ? (
+                            <span className="mini-tag">目标表 {selectedNode.targetTable}</span>
+                          ) : null}
+                          {selectedNode.rows != null ? (
+                            <span className="mini-tag">{selectedNode.rows.toLocaleString()} 行</span>
+                          ) : null}
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                           <Button
                             size="small"
                             icon={<PlayCircleOutlined />}
-                            disabled={selectedNode.status === 'SKIPPED'}
-                            onClick={() => message.success(`已提交节点重跑（模拟）：${selectedNode.nodeName}`)}
+                            disabled={selectedNode.status === 'SKIPPED' || runDetail?.status === 'RUNNING'}
+                            onClick={rerunNode}
                           >
                             重跑该节点
                           </Button>
@@ -371,15 +478,17 @@ export default function LogsPage() {
                       <div className="logs-block-title">
                         <span>执行 SQL</span>
                         <Tooltip title="复制 SQL">
-                          <Button type="text" size="small" icon={<CopyOutlined />} onClick={copySql} disabled={!selectedNode.sql} />
+                          <Button type="text" size="small" icon={<CopyOutlined />} onClick={copySql} disabled={!nodeSql} />
                         </Tooltip>
                       </div>
-                      <pre className="sql-block">{selectedNode.sql || '-- 该节点没有生成 SQL'}</pre>
+                      <pre className="sql-block">
+                        {nodeLogLoading ? '-- 正在加载节点 SQL…' : nodeSql || '-- 该节点没有生成 SQL'}
+                      </pre>
 
                       {selectedNode.errorStack ? (
                         <>
                           <div className="logs-block-title" style={{ color: 'var(--danger)' }}>
-                            <span>错误堆栈</span>
+                            <span>错误信息</span>
                           </div>
                           <pre className="sql-block error-block">{selectedNode.errorStack}</pre>
                         </>
@@ -389,11 +498,19 @@ export default function LogsPage() {
                         <span>运行日志</span>
                       </div>
                       <div className="log-lines">
-                        {selectedNode.logs.map((line, i) => (
-                          <div key={`${line}-${i}`} className="log-line">
-                            {line}
-                          </div>
-                        ))}
+                        {nodeLog?.list?.length
+                          ? nodeLog.list.map((line, i) => (
+                              <div key={`${line.message}-${i}`} className="log-line">
+                                {line.time ? `${line.time} ` : ''}
+                                {line.level ? `[${line.level}] ` : ''}
+                                {line.message}
+                              </div>
+                            ))
+                          : selectedNode.logs.map((line, i) => (
+                              <div key={`${line}-${i}`} className="log-line">
+                                {line}
+                              </div>
+                            ))}
                       </div>
                     </>
                   )}

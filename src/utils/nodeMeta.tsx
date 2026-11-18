@@ -6,6 +6,9 @@ import {
   SwapOutlined,
   MergeCellsOutlined,
   ExportOutlined,
+  RetweetOutlined,
+  CalculatorOutlined,
+  CodeOutlined,
 } from '@ant-design/icons';
 import type { FlowNodeKind } from '../types';
 
@@ -38,6 +41,33 @@ export const NODE_META: Record<FlowNodeKind, NodeMeta> = {
     tint: '#D97706',
     icon: <FilterOutlined />,
   },
+  convert: {
+    kind: 'convert',
+    label: '类型转换',
+    enLabel: 'CONVERT',
+    desc: '按字段声明目标类型并生成 CAST 表达式',
+    color: '#FCE7F3',
+    tint: '#DB2777',
+    icon: <RetweetOutlined />,
+  },
+  calculator: {
+    kind: 'calculator',
+    label: '计算器',
+    enLabel: 'CALCULATOR',
+    desc: 'A、B、C 固定运算，行级追加新字段',
+    color: '#FEF3C7',
+    tint: '#B45309',
+    icon: <CalculatorOutlined />,
+  },
+  formula: {
+    kind: 'formula',
+    label: '公式',
+    enLabel: 'FORMULA',
+    desc: '自由表达式，行级追加新字段',
+    color: '#EEF2FF',
+    tint: '#4F46E5',
+    icon: <CodeOutlined />,
+  },
   groupBy: {
     kind: 'groupBy',
     label: 'Group By',
@@ -69,14 +99,23 @@ export const NODE_META: Record<FlowNodeKind, NodeMeta> = {
     kind: 'sink',
     label: 'Sink',
     enLabel: 'SINK',
-    desc: '写入外部库（v1 占位）',
+    desc: '写入目标库业务表',
     color: '#E6F7EE',
     tint: '#16A34A',
     icon: <ExportOutlined />,
   },
 };
 
-export const NODE_PALETTE: FlowNodeKind[] = ['filter', 'groupBy', 'join', 'union', 'sink'];
+export const NODE_PALETTE: FlowNodeKind[] = [
+  'filter',
+  'convert',
+  'calculator',
+  'formula',
+  'groupBy',
+  'join',
+  'union',
+  'sink',
+];
 
 export const NODE_COLORS = [
   '#E8F0FE',
@@ -92,6 +131,9 @@ export const NODE_COLORS = [
 export const DEFAULT_NODE_NAME: Record<FlowNodeKind, string> = {
   source: 'source',
   filter: 'filter',
+  convert: 'convert',
+  calculator: 'calculator',
+  formula: 'formula',
   groupBy: 'group_by',
   join: 'join',
   union: 'union',
