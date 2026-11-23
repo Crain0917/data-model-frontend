@@ -1,7 +1,16 @@
-import { Button, Input, InputNumber, Select } from 'antd';
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { App, Button, Input, InputNumber, Select } from 'antd';
 import { DeleteOutlined, PlusOutlined, TableOutlined } from '@ant-design/icons';
-import type { FieldDef, FormulaConfig, FormulaReturnType, FormulaRow } from '../../../types';
+import type {
+  FieldDef,
+  FlowNode,
+  FormulaConfig,
+  FormulaReturnType,
+  FormulaRow,
+} from '../../../types';
 import { findUpstream, outputFields } from '../../../utils/dagUtils';
+import { toDagJson } from '../../../utils/dagJson';
+import { previewNodeSql } from '../../../api/flow';
 import { DangerLine, NodeCommon, SectionTitle, WarningLine, fieldOptions, type PanelProps } from './common';
 import SqlPreview from './SqlPreview';
 
@@ -15,6 +24,13 @@ const RETURN_TYPES: Array<{ value: FormulaReturnType; label: string }> = [
 
 const GRID = '128px 260px 96px 58px 52px 96px 34px';
 const AGGREGATES = /\b(COUNT|AVG|MIN|MAX|GROUP_CONCAT|STDDEV\w*|VARIANCE|VAR_\w+|APPROX_COUNT_DISTINCT|PERCENTILE\w*|MEDIAN)\s*\(/i;
+
+interface Draft {
+  output?: string;
+  expression?: string;
+  length?: number | null;
+  precision?: number | null;
+}
 
 function blankRow(): FormulaRow {
   return {
@@ -56,26 +72,147 @@ export default function FormulaPanel({
   onPreviewSql,
   onPreviewData,
 }: PanelProps) {
+  const { message } = App.useApp();
   const cfg = normalize(node.data.config as Partial<FormulaConfig>);
   const upstream = findUpstream(node.id, nodes, edges);
   const upFields: FieldDef[] = upstream ? outputFields(upstream, nodes, edges) : [];
   const rows = cfg.formulas;
   const options = fieldOptions(upFields);
 
+  // 表达式/输出名先进本地草稿，失焦或 Ctrl+Enter 才提交，避免逐字触发 SQL 预览与红错。
+  const [drafts, setDrafts] = useState<Record<number, Draft>>({});
+  const draftsRef = useRef<Record<number, Draft>>({});
+  const cfgRef = useRef(cfg);
+  const onConfigRef = useRef(onConfig);
+  draftsRef.current = drafts;
+  cfgRef.current = cfg;
+  onConfigRef.current = onConfig;
+
   const patch = (p: Partial<FormulaConfig>) => onConfig({ ...cfg, ...p });
-  const updateRow = (index: number, p: Partial<FormulaRow>) => {
-    patch({ formulas: rows.map((row, i) => (i === index ? { ...row, ...p } : row)) });
+  const addRow = () => {
+    const current = flushDrafts();
+    onConfig({ ...current, formulas: [...current.formulas, blankRow()] });
   };
-  const addRow = () => patch({ formulas: [...rows, blankRow()] });
-  const removeRow = (index: number) => patch({ formulas: rows.filter((_, i) => i !== index) });
+  const removeRow = (index: number) => {
+    const current = flushDrafts();
+    onConfig({ ...current, formulas: current.formulas.filter((_, i) => i !== index) });
+  };
 
   const changeReturnType = (index: number, value: FormulaReturnType) => {
+    // 切换返回类型会重置长度/精度，丢弃该行尚未提交的旧数值草稿。
+    const draft = draftsRef.current[index];
+    if (draft && (draft.length !== undefined || draft.precision !== undefined)) {
+      const next = { ...draftsRef.current, [index]: { ...draft, length: undefined, precision: undefined } };
+      draftsRef.current = next;
+      setDrafts(next);
+    }
+    const row = rows[index];
+    let p: Partial<FormulaRow>;
     if (value === 'DECIMAL') {
-      updateRow(index, { returnType: value, length: rows[index].length ?? 18, precision: rows[index].precision ?? 2 });
+      p = { returnType: value, length: row.length ?? 18, precision: row.precision ?? 2 };
     } else if (value === 'STRING') {
-      updateRow(index, { returnType: value, length: rows[index].length ?? 255, precision: null });
+      p = { returnType: value, length: row.length ?? 255, precision: null };
     } else {
-      updateRow(index, { returnType: value, length: null, precision: null });
+      p = { returnType: value, length: null, precision: null };
+    }
+    patch({ formulas: rows.map((r, i) => (i === index ? { ...r, ...p } : r)) });
+  };
+
+  /** 把草稿合并进配置；only 指定时只提交某一行。 */
+  const flushDrafts = (only?: number): FormulaConfig => {
+    const current = cfgRef.current;
+    const pending = draftsRef.current;
+    const keys = only == null ? Object.keys(pending).map(Number) : [only];
+    if (!keys.length) return current;
+    let changed = false;
+    const formulas = current.formulas.map((row, i) => {
+      if (!keys.includes(i) || !pending[i]) return row;
+      const draft = pending[i];
+      const next = { ...row };
+      if (draft.output !== undefined && draft.output !== row.output) {
+        next.output = draft.output;
+        changed = true;
+      }
+      if (draft.expression !== undefined && draft.expression !== row.expression) {
+        next.expression = draft.expression;
+        changed = true;
+      }
+      if (draft.length !== undefined && draft.length !== row.length) {
+        next.length = draft.length;
+        changed = true;
+      }
+      if (draft.precision !== undefined && draft.precision !== row.precision) {
+        next.precision = draft.precision;
+        changed = true;
+      }
+      return next;
+    });
+    const nextDrafts = { ...pending };
+    keys.forEach((k) => delete nextDrafts[k]);
+    draftsRef.current = nextDrafts;
+    if (mountedRef.current) setDrafts(nextDrafts);
+    if (!changed) return current;
+    const nextCfg = { ...current, formulas };
+    cfgRef.current = nextCfg;
+    onConfigRef.current(nextCfg);
+    return nextCfg;
+  };
+  const flushRef = useRef(flushDrafts);
+  flushRef.current = flushDrafts;
+  const mountedRef = useRef(true);
+  useEffect(
+    () => () => {
+      // 切换节点 / 关闭面板时把未提交的草稿落库
+      mountedRef.current = false;
+      flushRef.current();
+    },
+    [],
+  );
+
+  const setDraft = (index: number, p: Draft) => {
+    setDrafts((prev) => ({ ...prev, [index]: { ...prev[index], ...p } }));
+  };
+  const commitRow = (index: number) => {
+    flushDrafts(index);
+  };
+  const onCtrlEnter = (e: ReactKeyboardEvent, index: number) => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      commitRow(index);
+      (e.currentTarget as HTMLElement).blur();
+    }
+  };
+  const insertField = (index: number, field: string) => {
+    const row = rows[index];
+    const draft = drafts[index];
+    const expression = draft?.expression ?? row.expression;
+    patch({
+      formulas: rows.map((r, i) =>
+        i === index ? { ...r, expression: appendField(expression, field) } : r,
+      ),
+    });
+    if (draft?.expression !== undefined) {
+      const next = { ...draftsRef.current };
+      if (next[index]) {
+        delete next[index].expression;
+        if (next[index].output === undefined) delete next[index];
+      }
+      draftsRef.current = next;
+      setDrafts(next);
+    }
+  };
+
+  const handlePreviewClick = async (): Promise<string | null> => {
+    try {
+      const committed = flushDrafts();
+      const updatedNodes = nodes.map((n) =>
+        n.id === node.id ? ({ ...n, data: { ...n.data, config: committed } } as FlowNode) : n,
+      );
+      const res = await previewNodeSql(flowId, node.id, toDagJson(updatedNodes, edges));
+      return res.displaySql || res.sql || null;
+    } catch (e) {
+      message.error((e as Error).message || 'SQL 预览失败');
+      return null;
     }
   };
 
@@ -87,6 +224,11 @@ export default function FormulaPanel({
     const p = r.length ?? 18;
     const s = r.precision ?? 2;
     return p < 1 || p > 38 || s < 0 || s > p;
+  });
+  const badLength = rows.filter((r) => {
+    if (r.returnType !== 'STRING') return false;
+    const len = r.length ?? 255;
+    return len < 1 || len > 65535;
   });
   const outs = complete.map((r) => r.output.trim().toLowerCase());
   const upNames = upFields.map((f) => f.name.toLowerCase());
@@ -159,20 +301,25 @@ export default function FormulaPanel({
             {rows.map((row, index) => {
               const decimal = row.returnType === 'DECIMAL';
               const isString = row.returnType === 'STRING';
+              const draft = drafts[index];
               return (
                 <div key={index} className="field-row" style={{ gridTemplateColumns: GRID, alignItems: 'start' }}>
                   <Input
                     size="small"
-                    value={row.output}
+                    value={draft?.output ?? row.output}
                     placeholder="新字段名"
-                    onChange={(e) => updateRow(index, { output: e.target.value })}
+                    onChange={(e) => setDraft(index, { output: e.target.value })}
+                    onBlur={() => commitRow(index)}
+                    onKeyDown={(e) => onCtrlEnter(e, index)}
                   />
                   <Input.TextArea
                     size="small"
-                    value={row.expression}
+                    value={draft?.expression ?? row.expression}
                     placeholder="[a]+[b]+[c]+[d]"
                     autoSize={{ minRows: 1, maxRows: 4 }}
-                    onChange={(e) => updateRow(index, { expression: e.target.value })}
+                    onChange={(e) => setDraft(index, { expression: e.target.value })}
+                    onBlur={() => commitRow(index)}
+                    onKeyDown={(e) => onCtrlEnter(e, index)}
                   />
                   <Select
                     size="small"
@@ -186,22 +333,24 @@ export default function FormulaPanel({
                     controls={false}
                     min={1}
                     max={isString ? 65535 : 38}
-                    value={row.length ?? undefined}
+                    value={(draft?.length !== undefined ? draft.length : row.length) ?? undefined}
                     placeholder={isString ? '255' : decimal ? '18' : '—'}
                     style={{ width: '100%' }}
                     disabled={!decimal && !isString}
-                    onChange={(v) => updateRow(index, { length: (v as number) ?? null })}
+                    onChange={(v) => setDraft(index, { length: (v as number) ?? null })}
+                    onBlur={() => commitRow(index)}
                   />
                   <InputNumber
                     size="small"
                     controls={false}
                     min={0}
                     max={decimal ? Number(row.length ?? 18) : 0}
-                    value={row.precision ?? undefined}
+                    value={(draft?.precision !== undefined ? draft.precision : row.precision) ?? undefined}
                     placeholder={decimal ? '2' : '—'}
                     style={{ width: '100%' }}
                     disabled={!decimal}
-                    onChange={(v) => updateRow(index, { precision: (v as number) ?? null })}
+                    onChange={(v) => setDraft(index, { precision: (v as number) ?? null })}
+                    onBlur={() => commitRow(index)}
                   />
                   <Select
                     size="small"
@@ -210,9 +359,7 @@ export default function FormulaPanel({
                     placeholder="插入字段"
                     style={{ width: '100%' }}
                     options={options}
-                    onChange={(v) =>
-                      updateRow(index, { expression: appendField(row.expression, String(v)) })
-                    }
+                    onChange={(v) => insertField(index, String(v))}
                   />
                   <Button
                     size="small"
@@ -244,6 +391,11 @@ export default function FormulaPanel({
             DECIMAL 精度非法：{badDecimal.map((r) => r.output || '未命名').join('、')}（总位数 1–38，小数位 0–总位数）
           </DangerLine>
         ) : null}
+        {badLength.length ? (
+          <DangerLine>
+            STRING 长度非法：{badLength.map((r) => r.output || '未命名').join('、')}（1–65535）
+          </DangerLine>
+        ) : null}
         {duplicateOuts.length ? (
           <DangerLine>输出字段重名：{duplicateOuts.join('、')}，请修改输出字段名。</DangerLine>
         ) : null}
@@ -261,7 +413,14 @@ export default function FormulaPanel({
         </Button>
       </div>
 
-      <SqlPreview node={node} nodes={nodes} edges={edges} flowId={flowId} onPreviewSql={onPreviewSql} />
+      <SqlPreview
+        node={node}
+        nodes={nodes}
+        edges={edges}
+        flowId={flowId}
+        onPreviewSql={onPreviewSql}
+        onPreviewClick={handlePreviewClick}
+      />
     </div>
   );
 }

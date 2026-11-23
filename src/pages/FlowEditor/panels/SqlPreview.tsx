@@ -11,9 +11,18 @@ interface Props {
   edges: FlowEdge[];
   flowId: string;
   onPreviewSql: (sql: string) => void;
+  /** 面板有未提交草稿时：先提交再取最新 SQL，拿到的结果用于打开预览弹窗。 */
+  onPreviewClick?: () => Promise<string | null> | string | null;
 }
 
-export default function SqlPreview({ node, nodes, edges, flowId, onPreviewSql }: Props) {
+export default function SqlPreview({
+  node,
+  nodes,
+  edges,
+  flowId,
+  onPreviewSql,
+  onPreviewClick,
+}: Props) {
   const dagJson = useMemo(() => JSON.stringify(toDagJson(nodes, edges)), [nodes, edges]);
   const configKey = useMemo(() => JSON.stringify(node.data.config), [node.data.config]);
   const [remote, setRemote] = useState<NodeSqlPreview | null>(null);
@@ -87,8 +96,15 @@ export default function SqlPreview({ node, nodes, edges, flowId, onPreviewSql }:
           <Button
             size="small"
             icon={<FormOutlined />}
-            disabled={!displaySql || loading || Boolean(error)}
-            onClick={() => onPreviewSql(displaySql)}
+            disabled={onPreviewClick ? false : !displaySql || loading || Boolean(error)}
+            onClick={async () => {
+              if (onPreviewClick) {
+                const sql = await onPreviewClick();
+                if (sql) onPreviewSql(sql);
+                return;
+              }
+              onPreviewSql(displaySql);
+            }}
           >
             预览 SQL
           </Button>

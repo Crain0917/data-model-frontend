@@ -14,12 +14,20 @@ import {
   PlayCircleFilled,
   ReloadOutlined,
   SaveOutlined,
+  ThunderboltOutlined,
   WarningFilled,
 } from '@ant-design/icons';
 import type { DataSource, FlowDeleteResult, FlowRun, TableInfo } from '../../types';
 import { listDataSources } from '../../api/datasource';
 import { listColumns, listTables } from '../../api/datasource';
-import { duplicateFlow, getRun, listRuns, startNodeRun, startRun } from '../../api/flow';
+import {
+  duplicateFlow,
+  getRun,
+  listRuns,
+  startMiddleRun,
+  startNodeRun,
+  startRun,
+} from '../../api/flow';
 import { createNode } from '../../utils/dagUtils';
 import { dagWarnings } from '../../utils/validation';
 import { useFlowStore } from './store';
@@ -100,6 +108,7 @@ export default function FlowEditorPage() {
   const [tablesLoading, setTablesLoading] = useState(false);
   const [tablesError, setTablesError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
+  const [middleRunning, setMiddleRunning] = useState(false);
   const [lastRun, setLastRun] = useState<FlowRun | null>(null);
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -283,6 +292,7 @@ export default function FlowEditorPage() {
             return;
           }
           setRunning(false);
+          setMiddleRunning(false);
           setFlowMeta({ lastRunStatus: run.status, lastRunTime: run.endTime || null });
           if (run.status === 'SUCCESS') {
             message.success({
@@ -305,6 +315,7 @@ export default function FlowEditorPage() {
         .catch((e) => {
           if (token !== pollToken.current) return;
           setRunning(false);
+          setMiddleRunning(false);
           message.error({ content: `查询执行状态失败：${(e as Error).message}`, key: 'flow-run', duration: 5 });
         });
     },
@@ -315,6 +326,7 @@ export default function FlowEditorPage() {
     async (nodeId: string) => {
       if (!flow || running) return;
       setRunning(true);
+      setMiddleRunning(false);
       stopPolling();
       const token = pollToken.current;
       message.loading({ content: '节点重试提交中…', key: 'flow-run', duration: 0 });
@@ -325,6 +337,7 @@ export default function FlowEditorPage() {
         pollRun(runId, token);
       } catch (e) {
         setRunning(false);
+        setMiddleRunning(false);
         message.error({ content: (e as Error).message || '节点重试失败', key: 'flow-run', duration: 5 });
       }
     },
@@ -347,6 +360,7 @@ export default function FlowEditorPage() {
           applyRunStatuses(run);
           if (run.status === 'RUNNING' || run.status === 'PENDING') {
             setRunning(true);
+            setMiddleRunning(run.runType === 'MIDDLE');
             pollRun(run.id, pollToken.current);
           }
         });
@@ -371,6 +385,7 @@ export default function FlowEditorPage() {
       return;
     }
     setRunning(true);
+    setMiddleRunning(false);
     stopPolling();
     const token = pollToken.current;
     message.loading({ content: '任务提交中…', key: 'flow-run', duration: 0 });
@@ -388,7 +403,43 @@ export default function FlowEditorPage() {
       pollRun(runId, token);
     } catch (e) {
       setRunning(false);
+      setMiddleRunning(false);
       message.error({ content: (e as Error).message || '任务提交失败', key: 'flow-run', duration: 4 });
+    }
+  };
+
+  /** 中间任务：不重新同步 src 表，只重跑其余节点。 */
+  const runMiddle = async () => {
+    if (!flow || running) return;
+    if (!nodes.length) {
+      message.warning('画布为空，请先拖入数据表或添加节点');
+      return;
+    }
+    if (warnings.length) {
+      message.warning(`配置待检查：${warnings[0]}${warnings.length > 1 ? ` 等 ${warnings.length} 项` : ''}`);
+      return;
+    }
+    setRunning(true);
+    setMiddleRunning(true);
+    stopPolling();
+    const token = pollToken.current;
+    message.loading({ content: '中间任务提交中…', key: 'flow-run', duration: 0 });
+    try {
+      await save(true);
+      if (useFlowStore.getState().saveStatus === 'error') {
+        throw new Error(useFlowStore.getState().saveError || '画布保存失败，已取消执行');
+      }
+      const runId = await startMiddleRun(flow.id);
+      useFlowStore.getState().nodes.forEach((n) => {
+        setRunStatus(n.id, n.data.kind === 'source' ? 'SKIPPED' : 'RUNNING');
+      });
+      setLastRun(null);
+      message.loading({ content: `中间任务执行中（run #${runId}）…`, key: 'flow-run', duration: 0 });
+      pollRun(runId, token);
+    } catch (e) {
+      setRunning(false);
+      setMiddleRunning(false);
+      message.error({ content: (e as Error).message || '中间任务提交失败', key: 'flow-run', duration: 5 });
     }
   };
 
@@ -552,8 +603,25 @@ export default function FlowEditorPage() {
         </span>
 
         <Tooltip title="提交到后端：源表先同步到 Doris，各节点用 Doris SQL 计算">
-          <Button type="primary" icon={<PlayCircleFilled />} loading={running} onClick={runFlow}>
+          <Button
+            type="primary"
+            icon={<PlayCircleFilled />}
+            loading={running && !middleRunning}
+            disabled={running && middleRunning}
+            onClick={runFlow}
+          >
             运行任务
+          </Button>
+        </Tooltip>
+        <Tooltip title="不重新同步 src 表，只重跑其余节点">
+          <Button
+            className="btn-run-middle"
+            icon={<ThunderboltOutlined />}
+            loading={middleRunning}
+            disabled={running && !middleRunning}
+            onClick={runMiddle}
+          >
+            运行中间任务
           </Button>
         </Tooltip>
         <Button icon={<HistoryOutlined />} onClick={() => navigate(`/logs?flowId=${flow.id}`)}>
@@ -581,7 +649,7 @@ export default function FlowEditorPage() {
         >
           <span>{lastRun.status === 'FAILED' ? '✕' : '⏳'}</span>
           <span>
-            run #{lastRun.id}
+            {lastRun.runType === 'MIDDLE' ? '中间任务 ' : ''}run #{lastRun.id}
             {lastRun.status === 'FAILED'
               ? (() => {
                   const failed = lastRun.nodes.find((n) => n.status === 'FAILED');

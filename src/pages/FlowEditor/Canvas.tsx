@@ -84,8 +84,52 @@ function CanvasInner({ flowId, nodes, edges, fitSignal = 0 }: Props) {
   const setViewport = useFlowStore((s) => s.setViewport);
   const [dragOver, setDragOver] = useState(false);
   const [helperLines, setHelperLines] = useState<HelperLineState>({});
+  const [ctrlActive, setCtrlActive] = useState(false);
   const helperLinesRef = useRef<HelperLineState>({});
+  const ctrlRef = useRef(false);
+  const dragChangeRef = useRef<Extract<NodeChange<FlowNode>, { type: 'position' }> | null>(null);
+  const nodesRef = useRef(nodes);
+  nodesRef.current = nodes;
   const wrapperRef = useRef<HTMLDivElement>(null);
+
+  const clearHelperLines = useCallback(() => {
+    if (helperLinesRef.current.horizontal !== undefined || helperLinesRef.current.vertical !== undefined) {
+      helperLinesRef.current = {};
+      setHelperLines({});
+    }
+  }, []);
+
+  // Ctrl（macOS 兼容 Cmd）按住时才启用对齐辅助线与吸附，拖动中途按下/松开即时生效
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      const held = e.ctrlKey || e.metaKey;
+      if (held === ctrlRef.current) return;
+      ctrlRef.current = held;
+      setCtrlActive(held);
+      if (!held) {
+        clearHelperLines();
+        return;
+      }
+      const drag = dragChangeRef.current;
+      if (!drag) return;
+      const { horizontal, vertical } = getHelperLines(drag, nodesRef.current);
+      helperLinesRef.current = { horizontal, vertical };
+      setHelperLines({ horizontal, vertical });
+    };
+    const handleBlur = () => {
+      ctrlRef.current = false;
+      setCtrlActive(false);
+      clearHelperLines();
+    };
+    window.addEventListener('keydown', handleKey);
+    window.addEventListener('keyup', handleKey);
+    window.addEventListener('blur', handleBlur);
+    return () => {
+      window.removeEventListener('keydown', handleKey);
+      window.removeEventListener('keyup', handleKey);
+      window.removeEventListener('blur', handleBlur);
+    };
+  }, [clearHelperLines]);
 
   useEffect(() => {
     if (!fitSignal) return;
@@ -100,14 +144,13 @@ function CanvasInner({ flowId, nodes, edges, fitSignal = 0 }: Props) {
       const dragChange = changes.find(
         (c): c is Extract<NodeChange<FlowNode>, { type: 'position' }> => c.type === 'position' && Boolean((c as { dragging?: boolean }).dragging),
       );
-      if (!dragChange) {
-        if (helperLinesRef.current.horizontal !== undefined || helperLinesRef.current.vertical !== undefined) {
-          helperLinesRef.current = {};
-          setHelperLines({});
-        }
+      if (!dragChange || !ctrlRef.current) {
+        dragChangeRef.current = dragChange ?? null;
+        clearHelperLines();
         onNodesChange(changes);
         return;
       }
+      dragChangeRef.current = dragChange;
 
       const { horizontal, vertical, snapPosition } = getHelperLines(dragChange, nodes);
       if (horizontal !== helperLinesRef.current.horizontal || vertical !== helperLinesRef.current.vertical) {
@@ -131,7 +174,7 @@ function CanvasInner({ flowId, nodes, edges, fitSignal = 0 }: Props) {
       });
       onNodesChange(snapped as NodeChange<FlowNode>[]);
     },
-    [nodes, onNodesChange],
+    [nodes, onNodesChange, clearHelperLines],
   );
 
   const nodesWithWarnings = useMemo(
@@ -395,7 +438,9 @@ function CanvasInner({ flowId, nodes, edges, fitSignal = 0 }: Props) {
           opacity: 0.9,
         }}
       >
-        拖拽移动 · 滚轮缩放 · 框选多选 · Delete 删除 · {flowId ? `flow_${flowId}` : ''}
+        拖拽移动 · <span style={{ color: ctrlActive ? 'var(--color-primary)' : 'inherit', fontWeight: ctrlActive ? 600 : 400 }}>
+          {ctrlActive ? 'Ctrl 吸附对齐已开启' : '按住 Ctrl 拖动节点可吸附对齐'}
+        </span> · 滚轮缩放 · 框选多选 · Delete 删除 · {flowId ? `flow_${flowId}` : ''}
       </div>
       </div>
     </div>

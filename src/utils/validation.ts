@@ -1,9 +1,9 @@
-import type { FlowEdge, FlowNode, FlowNodeKind } from '../types';
+import type { CalculatorRow, FlowEdge, FlowNode, FlowNodeKind } from '../types';
+import { isCalcRowComplete } from './calcOps';
 import { findUpstream, outputFields } from './dagUtils';
 
 const SINGLE_INPUT: FlowNodeKind[] = ['filter', 'convert', 'calculator', 'formula', 'groupBy', 'sink'];
 
-const CALC_TERNARY = ['ADD3', 'MULTIPLY3'];
 const FORMULA_AGGREGATES =
   /\b(COUNT|AVG|MIN|MAX|GROUP_CONCAT|STDDEV\w*|VARIANCE|VAR_\w+|APPROX_COUNT_DISTINCT|PERCENTILE\w*|MEDIAN)\s*\(/i;
 
@@ -124,23 +124,16 @@ function calculatorIssues(
   nodes: FlowNode[],
   edges: FlowEdge[],
 ): string[] {
-  const rows = ((cfg.calculations || []) as Array<Record<string, any>>).filter(
+  const rows = ((cfg.calculations || []) as CalculatorRow[]).filter(
     (r) =>
       String(r.output || '').trim() ||
       String(r.fieldA || '').trim() ||
       String(r.fieldB || '').trim() ||
-      String(r.fieldC || '').trim(),
+      String(r.fieldC || '').trim() ||
+      String(r.literalB || '').trim() ||
+      String(r.literalC || '').trim(),
   );
-  const complete = rows.filter((r) => {
-    const op = String(r.operation || '').toUpperCase();
-    return (
-      String(r.output || '').trim() &&
-      op &&
-      String(r.fieldA || '').trim() &&
-      String(r.fieldB || '').trim() &&
-      (!CALC_TERNARY.includes(op) || String(r.fieldC || '').trim())
-    );
-  });
+  const complete = rows.filter((r) => isCalcRowComplete(r));
   const issues: string[] = [];
   if (!complete.length) issues.push('尚未配置任何计算');
   else if (complete.length < rows.length) issues.push('存在未完成的计算行');

@@ -4,6 +4,7 @@ import type {
   FlowRun,
   FlowSummary,
   NodeDataPreview,
+  NodeErrorDetail,
   NodeLogs,
   NodeRun,
   PageResult,
@@ -166,7 +167,8 @@ function mapRun(raw: RawFlowRun): FlowRun {
     endTime: raw.endTime || null,
     durationMs: raw.costMs ?? null,
     trigger: 'MANUAL',
-    runType: raw.runType === 'NODE' ? 'NODE' : 'FULL',
+    runType:
+      raw.runType === 'NODE' ? 'NODE' : raw.runType === 'MIDDLE' ? 'MIDDLE' : 'FULL',
     targetNodeId: raw.targetNodeId || null,
     errMsg: raw.errMsg || null,
     nodes: (raw.nodes || []).map(mapNodeRun),
@@ -318,6 +320,15 @@ export async function startRun(flowId: string): Promise<string> {
   return String(res.runId);
 }
 
+/** 中间任务：不重新同步 src 表，只重跑其余节点（后端 runType=MIDDLE）。 */
+export async function startMiddleRun(flowId: string): Promise<string> {
+  if (USE_MOCK) return flowMock.startMiddleRun(flowId);
+  const res = (await http.post(`/flow/${flowId}/run-middle`)) as unknown as {
+    runId: number | string;
+  };
+  return String(res.runId);
+}
+
 export async function startNodeRun(
   flowId: string,
   nodeId: string,
@@ -365,4 +376,31 @@ export async function getNodeLogs(runId: string, nodeId: string): Promise<NodeLo
   return (await http.get(
     `/flow-run/${runId}/node/${nodeId}/logs`,
   )) as unknown as NodeLogs;
+}
+
+/** 按需加载：错误详情（执行 SQL + 完整错误 + Doris Stream Load 日志）。 */
+export async function getNodeErrorDetail(
+  runId: string,
+  nodeId: string,
+): Promise<NodeErrorDetail> {
+  if (USE_MOCK) {
+    return {
+      runId,
+      nodeId,
+      nodeName: nodeId,
+      status: 'FAILED',
+      errorCode: null,
+      failStage: null,
+      errMsg: 'Mock 模式未连接后端，无错误详情',
+      sqlText: null,
+      sqlParams: null,
+      errorUrl: null,
+      streamLoadLog: null,
+      streamLoadLogTruncated: null,
+      fetchError: null,
+    };
+  }
+  return (await http.get(
+    `/flow-run/${runId}/node/${nodeId}/error-detail`,
+  )) as unknown as NodeErrorDetail;
 }

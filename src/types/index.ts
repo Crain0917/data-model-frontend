@@ -16,6 +16,10 @@ export interface DataSource {
   lastTestTime?: string | null;
   createTime?: string;
   updateTime?: string;
+  /** 仅 Doris：Stream Load HTTP 端口（后端从 extraParams.httpPort 解析） */
+  httpPort?: number | null;
+  /** 仅 Doris：数据源是否已配置 Stream Load 端口 */
+  httpPortConfigured?: boolean;
 }
 
 export interface PageResult<T> {
@@ -151,9 +155,66 @@ export type CalcOperation =
   | 'DIVIDE'
   | 'MOD'
   | 'ADD3'
-  | 'MULTIPLY3';
+  | 'MULTIPLY3'
+  | 'AVG3'
+  | 'MIN'
+  | 'MAX'
+  | 'ROUND'
+  | 'STDROUND'
+  | 'CEIL'
+  | 'FLOOR'
+  | 'NVL'
+  | 'DATE_ADD_DAYS'
+  | 'DATE_SUB_DAYS'
+  | 'DATE_ADD_MONTHS'
+  | 'DATE_SUB_MONTHS'
+  | 'DATE_ADD_HOURS'
+  | 'DATE_SUB_HOURS'
+  | 'DATE_ADD_MINUTES'
+  | 'DATE_SUB_MINUTES'
+  | 'DATE_ADD_SECONDS'
+  | 'DATE_SUB_SECONDS'
+  | 'DATE_DIFF_DAYS'
+  | 'DATE_DIFF_HOURS'
+  | 'DATE_DIFF_MINUTES'
+  | 'DATE_DIFF_SECONDS'
+  | 'YEAR_OF_DATE'
+  | 'MONTH_OF_DATE'
+  | 'DAY_OF_MONTH'
+  | 'DAY_OF_WEEK'
+  | 'DAY_OF_YEAR'
+  | 'WEEK_OF_YEAR'
+  | 'QUARTER_OF_DATE'
+  | 'HOUR_OF_DAY'
+  | 'MINUTE_OF_HOUR'
+  | 'SECOND_OF_MINUTE'
+  | 'DATE_FORMAT'
+  | 'DATE_PARSE'
+  | 'UPPER'
+  | 'LOWER'
+  | 'INITCAP'
+  | 'TRIM'
+  | 'LTRIM'
+  | 'RTRIM'
+  | 'LENGTH'
+  | 'SUBSTRING'
+  | 'LEFT'
+  | 'RIGHT'
+  | 'REPLACE'
+  | 'CONCAT2'
+  | 'CONCAT3'
+  | 'LPAD'
+  | 'RPAD';
 
-export type CalcReturnType = 'DOUBLE' | 'DECIMAL' | 'BIGINT' | 'INT';
+export type CalcArgMode = 'FIELD' | 'LITERAL';
+export type CalcReturnType =
+  | 'DOUBLE'
+  | 'DECIMAL'
+  | 'BIGINT'
+  | 'INT'
+  | 'DATE'
+  | 'DATETIME'
+  | 'STRING';
 export type FormulaReturnType = 'DOUBLE' | 'DECIMAL' | 'STRING' | 'BIGINT' | 'INT';
 
 /** 契约字段名冻结，见后端 SqlBuilderFactory.parseCalculations。 */
@@ -163,6 +224,11 @@ export interface CalculatorRow {
   fieldA: string;
   fieldB: string;
   fieldC?: string | null;
+  /** B/C 缺省 FIELD，LITERAL 时必须写并带 literalB/literalC */
+  argBType?: CalcArgMode;
+  argCType?: CalcArgMode;
+  literalB?: string | null;
+  literalC?: string | null;
   returnType: CalcReturnType;
   length?: number | null;
   precision?: number | null;
@@ -341,7 +407,7 @@ export interface FlowRun {
   endTime?: string | null;
   durationMs?: number | null;
   trigger: 'MANUAL' | 'RETRY' | 'SCHEDULE';
-  runType?: 'FULL' | 'NODE';
+  runType?: 'FULL' | 'NODE' | 'MIDDLE';
   targetNodeId?: string | null;
   errMsg?: string | null;
   nodes: NodeRun[];
@@ -367,4 +433,21 @@ export interface NodeLogs {
   sqlText?: string | null;
   sqlParams?: string | null;
   list: Array<{ time?: string; level?: string; message: string }>;
+}
+
+/** 契约字段名冻结：GET /flow-run/{runId}/node/{nodeId}/error-detail */
+export interface NodeErrorDetail {
+  runId: string | number;
+  nodeId: string;
+  nodeName: string;
+  status: string;
+  errorCode: number | null;
+  failStage: string | null;
+  errMsg: string | null;
+  sqlText: string | null;
+  sqlParams: string | null;
+  errorUrl: string | null;
+  streamLoadLog: string | null;
+  streamLoadLogTruncated: boolean | null;
+  fetchError: string | null;
 }

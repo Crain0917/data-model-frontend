@@ -49,6 +49,18 @@ const TABLE_RE = /^[A-Za-z0-9_$]+$/;
 const TARGET_COLUMN_RE = /^[A-Za-z0-9_]+$/;
 const HIDDEN = new Set(['__dm_rowid', '__dm_sink_seq']);
 
+/** 后端 DataSourceVO 会直接给 httpPort；旧数据回退解析 extraParams.httpPort。 */
+function readHttpPort(raw?: string): number | null {
+  if (!raw || !raw.trim()) return null;
+  try {
+    const parsed = JSON.parse(raw) as { httpPort?: unknown };
+    const n = Number(parsed?.httpPort);
+    return Number.isFinite(n) && n >= 1 && n <= 65535 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
 function normalize(cfg: Partial<SinkConfig>): SinkConfig {
   const type = String(cfg.targetType || 'DORIS').toUpperCase() as SinkTargetType;
   const targetType: SinkTargetType = ['DORIS', 'MYSQL', 'DM8', 'ORACLE'].includes(type) ? type : 'DORIS';
@@ -170,6 +182,15 @@ export default function SinkPanel(props: PanelProps) {
   const keyTargetSet = new Set(mappingTargets);
   const unknownKeys = (cfg.keyColumns || []).filter((k) => !keyTargetSet.has(k));
   const isDoris = cfg.targetType === 'DORIS';
+  const selectedTargetDs = dataSources.find(
+    (d) => d.id === cfg.dataSourceId && d.type === cfg.targetType,
+  );
+  const streamLoadPort = selectedTargetDs
+    ? selectedTargetDs.httpPort ?? readHttpPort(selectedTargetDs.extraParams)
+    : null;
+  const streamLoadConfigured = selectedTargetDs
+    ? selectedTargetDs.httpPortConfigured ?? streamLoadPort != null
+    : false;
 
   const [planOpen, setPlanOpen] = useState(false);
 
@@ -298,8 +319,12 @@ export default function SinkPanel(props: PanelProps) {
     } else if (upstreamNames.length) {
       out.mapping = '请按上游字段生成字段映射';
     }
+    if (isDoris && cfg.dataSourceId && selectedTargetDs && !streamLoadConfigured) {
+      out.httpPort =
+        '该数据源未配置 Stream Load HTTP 端口，请到「数据源」中编辑并填写 httpPort（通常为 8040）后再保存/运行。';
+    }
     return out;
-  }, [cfg, upstreamNames]);
+  }, [cfg, upstreamNames, isDoris, selectedTargetDs, streamLoadConfigured]);
 
   const errorList = Object.values(errors);
   const staleMapping = cfg.fieldMapping.some(
@@ -309,9 +334,6 @@ export default function SinkPanel(props: PanelProps) {
   const sourceOptions = dataSources
     .filter((d) => d.type === (cfg.targetType as DataSourceType))
     .map((d) => ({ value: d.id, label: `${d.name} · ${d.type}` }));
-  const selectedTargetDs = dataSources.find(
-    (d) => d.id === cfg.dataSourceId && d.type === cfg.targetType,
-  );
 
   return (
     <div>
@@ -362,11 +384,11 @@ export default function SinkPanel(props: PanelProps) {
             <Radio key={o.value} value={o.value}>{o.label}</Radio>
           ))}
         </Radio.Group>
-        <div className="form-hint" style={{ marginBottom: 10 }}>
-          {cfg.targetType === 'DORIS'
-            ? 'Doris 目标走所选数据源的 Stream Load 写入，不再固定写平台内置 Doris。'
-            : `${TARGET_LABEL[cfg.targetType]} 目标走 JDBC 批量 INSERT，每批一个事务。`}
-        </div>
+        {cfg.targetType !== 'DORIS' ? (
+          <div className="form-hint" style={{ marginBottom: 10 }}>
+            {TARGET_LABEL[cfg.targetType]} 目标走 JDBC 批量 INSERT，每批一个事务。
+          </div>
+        ) : null}
 
         <div className="form-hint" style={{ marginBottom: 4 }}>
           目标数据源 <span style={{ color: 'var(--danger)' }}>*</span>
@@ -390,9 +412,17 @@ export default function SinkPanel(props: PanelProps) {
             {errors.dataSourceId}
           </div>
         ) : selectedTargetDs ? (
-          <div className="form-hint" style={{ marginBottom: 10 }}>
-            已选：{selectedTargetDs.name}（{selectedTargetDs.host}:{selectedTargetDs.port}
+          <div className="form-hint" style={{ marginBottom: errors.httpPort ? 4 : 10 }}>
+            已选：{selectedTargetDs.name}（
+            {isDoris
+              ? `Stream Load ${selectedTargetDs.host}:${streamLoadPort ?? '未配置'}`
+              : `${selectedTargetDs.host}:${selectedTargetDs.port}`}
             {selectedTargetDs.dbName ? ` / ${selectedTargetDs.dbName}` : ''}）
+          </div>
+        ) : null}
+        {errors.httpPort ? (
+          <div className="form-hint" style={{ color: 'var(--danger)', marginBottom: 10 }}>
+            {errors.httpPort}
           </div>
         ) : null}
 
@@ -773,6 +803,16 @@ export default function SinkPanel(props: PanelProps) {
               ? `${selectedTargetDs.name}（${selectedTargetDs.host}:${selectedTargetDs.port}）`
               : '未选择'}
           </span>
+          {isDoris ? (
+            <>
+              <span className="form-hint">Stream Load 端点</span>
+              <span>
+                {selectedTargetDs
+                  ? `${selectedTargetDs.host}:${streamLoadPort ?? '未配置'}`
+                  : '未选择'}
+              </span>
+            </>
+          ) : null}
           <span className="form-hint">写入方式</span>
           <b>{cfg.writeMode === 'OVERWRITE' ? '覆盖（写入前清空目标表）' : '追加'}</b>
           <span className="form-hint">写入通道</span>

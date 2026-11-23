@@ -104,7 +104,7 @@ export default function DataSourceDrawer({ open, record, onClose, onSaved }: Pro
         username: record.username || '',
         password: '',
         extraParams: record.extraParams || '',
-        httpPort: record.type === 'DORIS' ? readHttpPort(record.extraParams) : null,
+        httpPort: record.type === 'DORIS' ? record.httpPort ?? readHttpPort(record.extraParams) : null,
         remark: record.remark || '',
       });
     } else {
@@ -279,14 +279,14 @@ export default function DataSourceDrawer({ open, record, onClose, onSaved }: Pro
             name="host"
             label="主机地址"
             rules={[
-              { required: true, message: '请输入主机地址（如 192.168.10.11）' },
+              { required: true, message: '请输入主机地址（如 192.168.10.13）' },
               {
                 pattern: /^[A-Za-z0-9.-]+$/,
                 message: '主机地址格式不正确，请勿包含 http:// 、路径或端口',
               },
             ]}
           >
-            <Input placeholder="192.168.10.11" />
+            <Input placeholder="192.168.10.13" />
           </Form.Item>
           <Form.Item
             name="port"
@@ -303,10 +303,14 @@ export default function DataSourceDrawer({ open, record, onClose, onSaved }: Pro
         {showHttpPort ? (
           <Form.Item
             name="httpPort"
-            label="Stream Load HTTP 端口（可选）"
+            label="Stream Load HTTP 端口"
+            required
             tooltip="保存到数据源额外参数 extraParams.httpPort，供 Doris Sink 的 Stream Load 使用"
-            extra="留空则：与平台内置 Doris 一致时用 8040，否则按查询端口 - 1000（默认 8030）。"
-            rules={[{ type: 'number', min: 1, max: 65535, message: '端口需为 1–65535 之间的整数' }]}
+            extra="Doris Sink 必须通过 Stream Load 导入，请填写该 HTTP 端口（通常为 8040）；未填写将无法保存和运行。"
+            rules={[
+              { required: true, message: '请填写 Stream Load HTTP 端口（通常为 8040）' },
+              { type: 'number', min: 1, max: 65535, message: '端口需为 1–65535 之间的整数' },
+            ]}
           >
             <InputNumber style={{ width: '100%' }} placeholder="8040" min={1} max={65535} />
           </Form.Item>

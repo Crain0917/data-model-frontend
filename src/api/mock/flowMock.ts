@@ -592,6 +592,10 @@ export const flowMock = {
     return mockExecute(flowId, nodeId);
   },
 
+  startMiddleRun(flowId: string): Promise<string> {
+    return mockExecute(flowId, null, true);
+  },
+
   getRun(runId: string): Promise<FlowRun> {
     const run = readRuns().find((r) => r.id === runId);
     return run
@@ -611,7 +615,11 @@ export const flowMock = {
   },
 };
 
-function mockExecute(flowId: string, nodeId: string | null): Promise<string> {
+function mockExecute(
+  flowId: string,
+  nodeId: string | null,
+  middle = false,
+): Promise<string> {
   const flows = readFlows();
   const flow = flows.find((f) => f.id === flowId);
   if (!flow) return Promise.reject(new Error('任务不存在'));
@@ -620,23 +628,33 @@ function mockExecute(flowId: string, nodeId: string | null): Promise<string> {
   const started = nowStr();
   const nodes = selected.map((node, index) => {
     const isSink = node.data.kind === 'sink';
+    const isSource = node.data.kind === 'source';
+    const skipped = middle && isSource;
     const sink = node.data.config as { tableName?: string; targetType?: string };
-    const durationMs = 180 + Math.round(Math.random() * 800);
-    const rows = 500 + index * 137;
+    const durationMs = skipped ? 0 : 180 + Math.round(Math.random() * 800);
+    const rows = skipped ? null : 500 + index * 137;
     return {
       nodeId: node.id,
       nodeType: node.data.kind,
       nodeName: node.data.label,
-      status: 'SUCCESS' as const,
+      status: (skipped ? 'SKIPPED' : 'SUCCESS') as 'SKIPPED' | 'SUCCESS',
       rows,
       durationMs,
-      targetTable: isSink ? `${sink.targetType || 'DORIS'}:${sink.tableName || ''}` : undefined,
+      targetTable: skipped
+        ? 'mock_src_table（复用已同步源表）'
+        : isSink
+          ? `${sink.targetType || 'DORIS'}:${sink.tableName || ''}`
+          : undefined,
       sql: `-- Mock 执行：${node.data.label}`,
       logs: [
-        `[${started}] ${node.data.label} 开始执行`,
-        isSink
-          ? `[${started}] Sink 写入完成，${rows} 行（Mock 演示，未连接目标库）`
-          : `[${started}] 执行完成，耗时 ${durationMs}ms`,
+        skipped
+          ? `[${started}] 中间任务：跳过源表同步，复用已同步副本表`
+          : `[${started}] ${node.data.label} 开始执行`,
+        skipped
+          ? `[${started}] 源表节点已跳过`
+          : isSink
+            ? `[${started}] Sink 写入完成，${rows} 行（Mock 演示，未连接目标库）`
+            : `[${started}] 执行完成，耗时 ${durationMs}ms`,
       ],
     };
   });
@@ -649,7 +667,7 @@ function mockExecute(flowId: string, nodeId: string | null): Promise<string> {
     endTime: nowStr(),
     durationMs: nodes.reduce((sum, n) => sum + n.durationMs, 0),
     trigger: 'MANUAL',
-    runType: nodeId ? 'NODE' : 'FULL',
+    runType: middle ? 'MIDDLE' : nodeId ? 'NODE' : 'FULL',
     targetNodeId: nodeId,
     errMsg: null,
     nodes,

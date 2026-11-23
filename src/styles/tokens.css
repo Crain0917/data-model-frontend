@@ -6,6 +6,13 @@
   --color-primary-softer: #f5f7ff;
   --color-on-primary: #ffffff;
 
+  /* 「运行中间任务」紫色实心按钮 */
+  --color-middle: #7c3aed;
+  --color-middle-strong: #6d28d9;
+  --color-middle-active: #5b21b6;
+  --color-middle-shadow: rgba(124, 58, 237, 0.28);
+  --color-on-middle: #ffffff;
+
   --bg-app: #f7f8fc;
   --bg-elevated: #ffffff;
   --bg-subtle: #f3f5fa;
@@ -61,6 +68,13 @@ html[data-theme='dark'] {
   --color-primary-soft: rgba(94, 118, 255, 0.18);
   --color-primary-softer: rgba(94, 118, 255, 0.09);
   --color-on-primary: #0d1020;
+
+  /* 深色主题：偏亮的紫色底 + 深色字保证对比度 */
+  --color-middle: #a78bfa;
+  --color-middle-strong: #b9a4fb;
+  --color-middle-active: #c4b5fd;
+  --color-middle-shadow: rgba(167, 139, 250, 0.32);
+  --color-on-middle: #16122b;
 
   --bg-app: #0e1120;
   --bg-elevated: #171b2e;

@@ -143,7 +143,14 @@ function decimalType(length?: number | null, precision?: number | null): string 
 
 function calcOutputType(row: CalculatorRow): string {
   const type = String(row.returnType || 'DOUBLE').toUpperCase();
-  return type === 'DECIMAL' ? decimalType(row.length, row.precision) : type;
+  switch (type) {
+    case 'DECIMAL':
+      return decimalType(row.length, row.precision);
+    case 'STRING':
+      return `VARCHAR(${row.length && row.length > 0 ? row.length : 255})`;
+    default:
+      return type;
+  }
 }
 
 function formulaOutputType(row: FormulaRow): string {

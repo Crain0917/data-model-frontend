@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { App, Button, Select, Skeleton, Tooltip } from 'antd';
+import { Alert, App, Button, Modal, Select, Skeleton, Spin, Tooltip } from 'antd';
 import {
   CalendarOutlined,
   CheckCircleFilled,
@@ -15,8 +15,22 @@ import {
   SyncOutlined,
 } from '@ant-design/icons';
 import dayjs, { type Dayjs } from 'dayjs';
-import type { FlowRun, FlowSummary, NodeLogs, NodeRun, RunStatus } from '../../types';
-import { getNodeLogs, getRun, listFlows, listRuns, startNodeRun } from '../../api/flow';
+import type {
+  FlowRun,
+  FlowSummary,
+  NodeErrorDetail,
+  NodeLogs,
+  NodeRun,
+  RunStatus,
+} from '../../types';
+import {
+  getNodeErrorDetail,
+  getNodeLogs,
+  getRun,
+  listFlows,
+  listRuns,
+  startNodeRun,
+} from '../../api/flow';
 import { StatusTag } from '../../components/StatusTag';
 import EmptyState from '../../components/EmptyState';
 
@@ -31,6 +45,12 @@ const FAIL_STAGE_LABEL: Record<string, string> = {
   VALIDATE: '行数校验',
   OTHER: '执行',
 };
+
+function runTypeLabel(run: FlowRun): string | null {
+  if (run.runType === 'MIDDLE') return '中间任务';
+  if (run.runType === 'NODE') return '单节点';
+  return null;
+}
 
 function statusIcon(status: RunStatus, size = 13) {
   if (status === 'SUCCESS') return <CheckCircleFilled style={{ color: 'var(--success)', fontSize: size }} />;
@@ -74,6 +94,10 @@ export default function LogsPage() {
   const [runDetail, setRunDetail] = useState<FlowRun | null>(null);
   const [nodeLog, setNodeLog] = useState<NodeLogs | null>(null);
   const [nodeLogLoading, setNodeLogLoading] = useState(false);
+  const [errorDetail, setErrorDetail] = useState<NodeErrorDetail | null>(null);
+  const [errorDetailOpen, setErrorDetailOpen] = useState(false);
+  const [errorDetailLoading, setErrorDetailLoading] = useState(false);
+  const [errorDetailError, setErrorDetailError] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -186,6 +210,46 @@ export default function LogsPage() {
       alive = false;
     };
   }, [selectedRun?.id, selectedNodeId]);
+
+  // 切换运行/节点后关闭详情，下一次点击才重新请求。
+  useEffect(() => {
+    setErrorDetailOpen(false);
+    setErrorDetail(null);
+    setErrorDetailError(null);
+    setErrorDetailLoading(false);
+  }, [selectedRun?.id, selectedNodeId]);
+
+  const openErrorDetail = async () => {
+    if (!selectedRun || !selectedNode) return;
+    setErrorDetailOpen(true);
+    if (
+      errorDetail &&
+      String(errorDetail.runId) === selectedRun.id &&
+      errorDetail.nodeId === selectedNode.nodeId
+    ) {
+      return;
+    }
+    setErrorDetailLoading(true);
+    setErrorDetail(null);
+    setErrorDetailError(null);
+    try {
+      setErrorDetail(await getNodeErrorDetail(selectedRun.id, selectedNode.nodeId));
+    } catch (e) {
+      setErrorDetailError((e as Error).message || '错误详情加载失败');
+    } finally {
+      setErrorDetailLoading(false);
+    }
+  };
+
+  const copyText = async (text: string | null | undefined, label: string) => {
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      message.success(`${label}已复制`);
+    } catch {
+      message.error('复制失败，请手动选择文本');
+    }
+  };
 
   const cells = useMemo(() => monthCells(month), [month]);
 
@@ -379,6 +443,7 @@ export default function LogsPage() {
                     <span>{run.startTime.slice(11, 19)}</span>
                     <span>{durationText(run.durationMs)}</span>
                     {run.nodes.length ? <span>{run.nodes.length} 个节点</span> : null}
+                    {runTypeLabel(run) ? <span className="mini-tag">{runTypeLabel(run)}</span> : null}
                     <span className="mini-tag">{run.trigger === 'MANUAL' ? '手动' : run.trigger === 'RETRY' ? '重试' : '调度'}</span>
                   </div>
                 </button>
@@ -402,6 +467,9 @@ export default function LogsPage() {
                     {statusIcon(selectedRun.status, 15)}
                     {selectedRun.flowName}
                     <StatusTag status={selectedRun.status} />
+                    {runTypeLabel(selectedRun) ? (
+                      <span className="chip">{runTypeLabel(selectedRun)}</span>
+                    ) : null}
                   </div>
                   <div className="logs-section-sub mono">{selectedRun.id}</div>
                 </div>
@@ -417,6 +485,7 @@ export default function LogsPage() {
                 <div><span>结束时间</span><b>{selectedRun.endTime || '—'}</b></div>
                 <div><span>总耗时</span><b>{durationText(selectedRun.durationMs)}</b></div>
                 <div><span>触发方式</span><b>{selectedRun.trigger === 'MANUAL' ? '手动触发' : selectedRun.trigger === 'RETRY' ? '失败重试' : '定时调度'}</b></div>
+                <div><span>运行类型</span><b>{runTypeLabel(selectedRun) || '全量任务'}</b></div>
               </div>
 
               <div className="logs-detail-body">
@@ -487,8 +556,19 @@ export default function LogsPage() {
 
                       {selectedNode.errorStack ? (
                         <>
-                          <div className="logs-block-title" style={{ color: 'var(--danger)' }}>
+                          <div
+                            className="logs-block-title"
+                            style={{
+                              color: 'var(--danger)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                            }}
+                          >
                             <span>错误信息</span>
+                            <Button size="small" type="link" danger onClick={openErrorDetail}>
+                              展示详情
+                            </Button>
                           </div>
                           <pre className="sql-block error-block">{selectedNode.errorStack}</pre>
                         </>
@@ -520,6 +600,152 @@ export default function LogsPage() {
           )}
         </section>
       </div>
+
+      <Modal
+        open={errorDetailOpen}
+        onCancel={() => setErrorDetailOpen(false)}
+        title={`错误详情 · ${selectedNode?.nodeName || ''}`}
+        width={880}
+        footer={<Button onClick={() => setErrorDetailOpen(false)}>关闭</Button>}
+      >
+        {errorDetailLoading ? (
+          <div style={{ padding: '32px 0', textAlign: 'center', color: 'var(--text-secondary)' }}>
+            <Spin /> <span style={{ marginLeft: 8 }}>正在加载错误详情…</span>
+          </div>
+        ) : errorDetailError ? (
+          <Alert type="error" showIcon message="错误详情加载失败" description={errorDetailError} />
+        ) : errorDetail ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div className="logs-meta-grid">
+              <div>
+                <span>节点</span>
+                <b>{errorDetail.nodeName || selectedNode?.nodeName || '—'}</b>
+              </div>
+              <div>
+                <span>状态</span>
+                <b>{errorDetail.status || selectedNode?.status || '—'}</b>
+              </div>
+              <div>
+                <span>错误码</span>
+                <b>{errorDetail.errorCode != null ? String(errorDetail.errorCode) : '—'}</b>
+              </div>
+              <div>
+                <span>失败环节</span>
+                <b>
+                  {errorDetail.failStage
+                    ? FAIL_STAGE_LABEL[errorDetail.failStage] || errorDetail.failStage
+                    : '—'}
+                </b>
+              </div>
+            </div>
+
+            <div>
+              <div className="logs-block-title">
+                <span>错误信息</span>
+                <Tooltip title="复制错误信息">
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<CopyOutlined />}
+                    onClick={() => copyText(errorDetail.errMsg, '错误信息')}
+                    disabled={!errorDetail.errMsg}
+                  />
+                </Tooltip>
+              </div>
+              <pre className="sql-block error-block">
+                {errorDetail.errMsg || selectedNode?.errorStack || '—'}
+              </pre>
+            </div>
+
+            <div>
+              <div className="logs-block-title">
+                <span>执行 SQL</span>
+                <Tooltip title="复制 SQL">
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<CopyOutlined />}
+                    onClick={() => copyText(errorDetail.sqlText, 'SQL')}
+                    disabled={!errorDetail.sqlText}
+                  />
+                </Tooltip>
+              </div>
+              <pre className="sql-block" style={{ maxHeight: 240 }}>
+                {errorDetail.sqlText || '-- 该节点没有生成 SQL'}
+              </pre>
+            </div>
+
+            {errorDetail.sqlParams ? (
+              <div>
+                <div className="logs-block-title">
+                  <span>SQL 参数</span>
+                  <Tooltip title="复制参数">
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<CopyOutlined />}
+                      onClick={() => copyText(errorDetail.sqlParams, 'SQL 参数')}
+                    />
+                  </Tooltip>
+                </div>
+                <pre className="sql-block" style={{ maxHeight: 160 }}>
+                  {errorDetail.sqlParams}
+                </pre>
+              </div>
+            ) : null}
+
+            <div>
+              <div className="logs-block-title">
+                <span>Doris Stream Load 日志</span>
+                <Tooltip title="复制日志">
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<CopyOutlined />}
+                    onClick={() => copyText(errorDetail.streamLoadLog, 'Stream Load 日志')}
+                    disabled={!errorDetail.streamLoadLog}
+                  />
+                </Tooltip>
+              </div>
+              {!errorDetail.errorUrl ? (
+                <div className="form-hint">该错误没有可提取的 Stream Load 日志链接</div>
+              ) : errorDetail.fetchError ? (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="Stream Load 日志提取失败"
+                  description={
+                    <div>
+                      <div>{errorDetail.fetchError}</div>
+                      <div style={{ marginTop: 6 }}>
+                        <a href={errorDetail.errorUrl} target="_blank" rel="noreferrer">
+                          打开原始错误链接
+                        </a>
+                      </div>
+                    </div>
+                  }
+                />
+              ) : errorDetail.streamLoadLog ? (
+                <>
+                  <pre className="sql-block" style={{ maxHeight: 320 }}>
+                    {errorDetail.streamLoadLog}
+                  </pre>
+                  {errorDetail.streamLoadLogTruncated ? (
+                    <div className="form-hint">日志较长，已截断展示。</div>
+                  ) : null}
+                  <div className="form-hint" style={{ marginTop: 4 }}>
+                    <a href={errorDetail.errorUrl} target="_blank" rel="noreferrer">
+                      查看原始错误链接
+                    </a>
+                  </div>
+                </>
+              ) : (
+                <div className="form-hint">已获取错误链接，但未提取到日志内容。</div>
+              )}
+            </div>
+          </div>
+        ) : null}
+      </Modal>
     </div>
   );
 }

@@ -6,6 +6,7 @@ import type {
   FlowNodeKind,
 } from '../types';
 import { NODE_META } from './nodeMeta';
+import { calcOp } from './calcOps';
 
 type Json = Record<string, unknown>;
 
@@ -112,17 +113,44 @@ function toConfig(node: FlowNode, edges: FlowEdge[]): Json {
       return {
         alias: cfg.alias ?? 'a',
         calculations: ((cfg.calculations as Json[]) || [])
-          .map((c) => ({
-            output: String(c.output ?? '').trim(),
-            operation: String(c.operation ?? 'ADD').toUpperCase(),
-            fieldA: String(c.fieldA ?? ''),
-            fieldB: String(c.fieldB ?? ''),
-            fieldC: c.fieldC == null || String(c.fieldC) === '' ? null : String(c.fieldC),
-            returnType: String(c.returnType ?? 'DOUBLE').toUpperCase(),
-            length: c.length == null ? null : Number(c.length),
-            precision: c.precision == null ? null : Number(c.precision),
-          }))
-          .filter((c) => c.output || c.fieldA || c.fieldB || c.fieldC),
+          .map((c) => {
+            const op = calcOp(String(c.operation ?? 'ADD'));
+            // DATE_FORMAT/DATE_PARSE 的格式掩码、SUBSTRING 的起始位等只能传常量，序列化时强制 LITERAL。
+            const argBType =
+              op.bLiteralOnly || String(c.argBType ?? 'FIELD').toUpperCase() === 'LITERAL'
+                ? 'LITERAL'
+                : 'FIELD';
+            const argCType =
+              op.cMode === 'LITERAL' || String(c.argCType ?? 'FIELD').toUpperCase() === 'LITERAL'
+                ? 'LITERAL'
+                : 'FIELD';
+            return {
+              output: String(c.output ?? '').trim(),
+              operation: String(c.operation ?? 'ADD').toUpperCase(),
+              fieldA: String(c.fieldA ?? ''),
+              fieldB: String(c.fieldB ?? ''),
+              fieldC: c.fieldC == null || String(c.fieldC) === '' ? null : String(c.fieldC),
+              // 契约：缺省按 FIELD；LITERAL 行必须显式写 argBType/argCType。
+              ...(argBType === 'LITERAL'
+                ? { argBType, literalB: c.literalB == null ? '' : String(c.literalB) }
+                : {}),
+              ...(argCType === 'LITERAL'
+                ? { argCType, literalC: c.literalC == null ? '' : String(c.literalC) }
+                : {}),
+              returnType: String(c.returnType ?? 'DOUBLE').toUpperCase(),
+              length: c.length == null ? null : Number(c.length),
+              precision: c.precision == null ? null : Number(c.precision),
+            };
+          })
+          .filter(
+            (c) =>
+              c.output ||
+              c.fieldA ||
+              c.fieldB ||
+              c.fieldC ||
+              (c as Json).literalB ||
+              (c as Json).literalC,
+          ),
       };
     case 'formula':
       return {
@@ -330,6 +358,10 @@ function reverseConfig(kind: FlowNodeKind, raw: Json, nodeId: string, edges: Flo
           fieldA: String(c.fieldA ?? ''),
           fieldB: String(c.fieldB ?? ''),
           fieldC: c.fieldC == null ? null : String(c.fieldC),
+          argBType: String(c.argBType ?? 'FIELD').toUpperCase() === 'LITERAL' ? 'LITERAL' : 'FIELD',
+          argCType: String(c.argCType ?? 'FIELD').toUpperCase() === 'LITERAL' ? 'LITERAL' : 'FIELD',
+          literalB: c.literalB == null ? null : String(c.literalB),
+          literalC: c.literalC == null ? null : String(c.literalC),
           returnType: String(c.returnType ?? 'DOUBLE').toUpperCase(),
           length: (c.length as number | null) ?? null,
           precision: (c.precision as number | null) ?? null,
