@@ -52,7 +52,7 @@ export const NODE_META: Record<FlowNodeKind, NodeMeta> = {
   },
   calculator: {
     kind: 'calculator',
-    label: '计算器',
+    label: '简单公式计算列',
     enLabel: 'CALCULATOR',
     desc: 'A、B、C 固定运算，行级追加新字段',
     color: '#FEF3C7',
@@ -61,7 +61,7 @@ export const NODE_META: Record<FlowNodeKind, NodeMeta> = {
   },
   formula: {
     kind: 'formula',
-    label: '公式',
+    label: '自由公式计算列',
     enLabel: 'FORMULA',
     desc: '自由表达式，行级追加新字段',
     color: '#EEF2FF',
@@ -132,8 +132,8 @@ export const DEFAULT_NODE_NAME: Record<FlowNodeKind, string> = {
   source: 'source',
   filter: 'filter',
   convert: 'convert',
-  calculator: 'calculator',
-  formula: 'formula',
+  calculator: '简单公式计算列',
+  formula: '自由公式计算列',
   groupBy: 'group_by',
   join: 'join',
   union: 'union',

@@ -1344,6 +1344,44 @@ html[data-theme='dark'] .sink-node {
   font-size: 10px;
   color: var(--text-tertiary);
 }
+.drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 0;
+  border-radius: 4px;
+  color: var(--text-tertiary);
+  cursor: grab;
+  user-select: none;
+}
+.drag-handle:hover {
+  color: var(--color-primary);
+  background: var(--bg-subtle);
+}
+.drag-handle:active {
+  cursor: grabbing;
+}
+.field-row--dragging {
+  opacity: 0.5;
+}
+.field-row--over {
+  box-shadow: inset 0 2px 0 var(--color-primary);
+}
+
+/* 放大编辑弹窗 */
+.config-modal-inner {
+  max-width: 960px;
+  margin: 0 auto;
+}
+.config-modal-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
 .cond-row {
   display: flex;
   align-items: center;

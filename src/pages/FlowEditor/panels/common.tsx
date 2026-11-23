@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useState, type DragEvent, type ReactNode } from 'react';
 import { Input } from 'antd';
 import type {
   AnyNodeConfig,
@@ -85,4 +85,51 @@ export function DangerLine({ children }: { children: ReactNode }) {
 
 export function fieldOptions(fields: FieldDef[]) {
   return fields.map((f) => ({ value: f.name, label: `${f.name}  ·  ${f.type}` }));
+}
+
+/**
+ * 原生 HTML5 拖动排序：抓手可拖动，整行作为落点。
+ * 放下后把新数组交给 onReorder，由面板写回 config。
+ */
+export function useDragSort<T>(list: T[], onReorder: (next: T[]) => void) {
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [overIndex, setOverIndex] = useState<number | null>(null);
+
+  const handleProps = (index: number) => ({
+    draggable: true,
+    onDragStart: (e: DragEvent<HTMLElement>) => {
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', String(index));
+      setDragIndex(index);
+    },
+    onDragEnd: () => {
+      setDragIndex(null);
+      setOverIndex(null);
+    },
+  });
+
+  const rowProps = (index: number) => ({
+    onDragOver: (e: DragEvent<HTMLElement>) => {
+      if (dragIndex == null) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      if (overIndex !== index) setOverIndex(index);
+    },
+    onDrop: (e: DragEvent<HTMLElement>) => {
+      e.preventDefault();
+      if (dragIndex != null && dragIndex !== index) {
+        const next = [...list];
+        const [moved] = next.splice(dragIndex, 1);
+        next.splice(index, 0, moved);
+        onReorder(next);
+      }
+      setDragIndex(null);
+      setOverIndex(null);
+    },
+  });
+
+  const rowClass = (index: number) =>
+    `${dragIndex === index ? ' field-row--dragging' : ''}${overIndex === index ? ' field-row--over' : ''}`;
+
+  return { dragIndex, overIndex, handleProps, rowProps, rowClass };
 }

@@ -8,7 +8,7 @@ import {
 } from '@xyflow/react';
 import type { AnyNodeConfig, FlowDetail, FlowEdge, FlowNode, FlowViewport } from '../../types';
 import { getFlow, saveDag } from '../../api/flow';
-import { toDagJson } from '../../utils/dagJson';
+import { displayLabel, toDagJson } from '../../utils/dagJson';
 
 export type SaveStatus = 'saved' | 'dirty' | 'saving' | 'error';
 
@@ -72,7 +72,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
         nodes: (flow.nodes || []).map((n) => ({
           ...n,
           selected: false,
-          data: { ...n.data, runStatus: null },
+          data: { ...n.data, label: displayLabel(n.data.kind, n.data.label), runStatus: null },
         })),
         edges: flow.edges || [],
         viewport: flow.viewport || { x: 0, y: 0, zoom: 1 },

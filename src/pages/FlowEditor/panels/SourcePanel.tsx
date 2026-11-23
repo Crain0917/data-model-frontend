@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { App, Button, Input, Select, Spin, Tag } from 'antd';
 import {
   DatabaseOutlined,
+  HolderOutlined,
   ReloadOutlined,
   TableOutlined,
   DownOutlined,
@@ -9,7 +10,7 @@ import {
 } from '@ant-design/icons';
 import type { SourceConfig } from '../../../types';
 import { listColumns, listTables } from '../../../api/datasource';
-import { NodeCommon, SectionTitle, type PanelProps } from './common';
+import { NodeCommon, SectionTitle, useDragSort, type PanelProps } from './common';
 import ConditionEditor from './ConditionEditor';
 import SqlPreview from './SqlPreview';
 
@@ -26,6 +27,7 @@ export default function SourcePanel({
 }: PanelProps) {
   const { message } = App.useApp();
   const cfg = node.data.config as SourceConfig;
+  const fields = cfg.fields || [];
   const [tables, setTables] = useState<Array<{ tableName: string }>>([]);
   const [loadingTables, setLoadingTables] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -57,6 +59,7 @@ export default function SourcePanel({
   }, [cfg.dataSourceId, message]);
 
   const patch = (p: Partial<SourceConfig>) => onConfig({ ...cfg, ...p });
+  const drag = useDragSort(fields, (next) => patch({ fields: next }));
 
   const loadFields = async (dataSourceId: number, tableName: string) => {
     try {
@@ -81,20 +84,28 @@ export default function SourcePanel({
     }
     setRefreshing(true);
     try {
-      const fields = await loadFields(cfg.dataSourceId, cfg.tableName);
-      const oldNames = new Set((cfg.fields || []).map((f) => f.name));
-      const newNames = new Set(fields.map((f) => f.name));
-      const added = fields.filter((f) => !oldNames.has(f.name)).length;
-      const removed = (cfg.fields || []).filter((f) => !newNames.has(f.name)).length;
-      const typeChanged = fields.filter((f) => {
-        const old = (cfg.fields || []).find((o) => o.name === f.name);
+      const fetched = await loadFields(cfg.dataSourceId, cfg.tableName);
+      const previous = cfg.fields || [];
+      const oldNames = new Set(previous.map((f) => f.name));
+      const newNames = new Set(fetched.map((f) => f.name));
+      const added = fetched.filter((f) => !oldNames.has(f.name)).length;
+      const removed = previous.filter((f) => !newNames.has(f.name)).length;
+      const typeChanged = fetched.filter((f) => {
+        const old = previous.find((o) => o.name === f.name);
         return old && old.type !== f.type;
       }).length;
-      patch({ fields });
+      // 保留用户拖动后的既有顺序，新字段追加到末尾，已删除字段移除。
+      const fetchedByName = new Map(fetched.map((f) => [f.name, f]));
+      const kept = previous
+        .filter((f) => fetchedByName.has(f.name))
+        .map((f) => ({ name: f.name, type: fetchedByName.get(f.name)!.type }));
+      const keptNames = new Set(kept.map((f) => f.name));
+      const appended = fetched.filter((f) => !keptNames.has(f.name));
+      patch({ fields: [...kept, ...appended] });
       if (added || removed || typeChanged) {
         message.warning(`字段有变化：新增 ${added}、删除 ${removed}、类型变更 ${typeChanged}，下游节点已标记待检查`);
       } else {
-        message.success(`字段已刷新，共 ${fields.length} 个字段`);
+        message.success(`字段已刷新，共 ${fetched.length} 个字段`);
       }
     } finally {
       setRefreshing(false);
@@ -175,18 +186,38 @@ export default function SourcePanel({
           </Button>
         </div>
         {showFields ? (
-          <div className="field-table" style={{ marginTop: 8, maxHeight: 260, overflow: 'auto' }}>
-            <div className="field-row field-row--head" style={{ gridTemplateColumns: '1fr 110px' }}>
-              <span>字段</span>
-              <span>类型</span>
+          <>
+            <div className="form-hint" style={{ margin: '8px 0 6px' }}>
+              拖动可调整字段顺序，同步按此顺序写入。
             </div>
-            {(cfg.fields || []).map((f) => (
-              <div key={f.name} className="field-row" style={{ gridTemplateColumns: '1fr 110px' }}>
-                <span className="f-name">{f.name}</span>
-                <Tag style={{ margin: 0, fontSize: 10 }}>{f.type}</Tag>
+            <div className="field-table" style={{ maxHeight: 260, overflow: 'auto' }}>
+              <div className="field-row field-row--head" style={{ gridTemplateColumns: '22px 1fr 110px' }}>
+                <span />
+                <span>字段</span>
+                <span>类型</span>
               </div>
-            ))}
-          </div>
+              {fields.map((f, index) => (
+                <div
+                  key={f.name}
+                  className={`field-row${drag.rowClass(index)}`}
+                  style={{ gridTemplateColumns: '22px 1fr 110px' }}
+                  {...drag.rowProps(index)}
+                >
+                  <span
+                    className="drag-handle"
+                    role="button"
+                    aria-label={`拖动调整字段 ${f.name} 的顺序`}
+                    title="按住拖动调整顺序"
+                    {...drag.handleProps(index)}
+                  >
+                    <HolderOutlined />
+                  </span>
+                  <span className="f-name">{f.name}</span>
+                  <Tag style={{ margin: 0, fontSize: 10 }}>{f.type}</Tag>
+                </div>
+              ))}
+            </div>
+          </>
         ) : null}
       </div>
 

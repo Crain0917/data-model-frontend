@@ -1,6 +1,6 @@
-import { useState } from 'react';
-import { App, Button } from 'antd';
-import { CloseOutlined, DeleteOutlined } from '@ant-design/icons';
+import { useEffect, useState } from 'react';
+import { App, Button, Modal, Tooltip } from 'antd';
+import { CloseOutlined, DeleteOutlined, ExpandOutlined } from '@ant-design/icons';
 import type { DataSource, FieldDef, FlowEdge, FlowNode, FlowRun } from '../../types';
 import { NODE_META } from '../../utils/nodeMeta';
 import { toDagJson } from '../../utils/dagJson';
@@ -43,6 +43,7 @@ export default function ConfigDrawer({
   const removeNodes = useFlowStore((s) => s.removeNodes);
   const swapJoinInputs = useFlowStore((s) => s.swapJoinInputs);
 
+  const [expanded, setExpanded] = useState(false);
   const [sqlModal, setSqlModal] = useState<{ open: boolean; sql: string; title: string }>({
     open: false,
     sql: '',
@@ -63,6 +64,11 @@ export default function ConfigDrawer({
   const node = nodes.find((n) => n.id === selectedId);
   const open = Boolean(node);
   const meta = node ? NODE_META[node.data.kind] : NODE_META.filter;
+
+  // 切换或删除节点时退出放大模式，避免下次选中节点时弹窗自动重现。
+  useEffect(() => {
+    setExpanded(false);
+  }, [selectedId]);
 
   const onConfig = (config: any) => {
     if (node) updateNodeConfig(node.id, config);
@@ -119,6 +125,32 @@ export default function ConfigDrawer({
     onRetryNode,
   };
 
+  const renderPanel = () => {
+    if (!node) return null;
+    switch (node.data.kind) {
+      case 'source':
+        return <SourcePanel {...panelProps} />;
+      case 'filter':
+        return <FilterPanel {...panelProps} />;
+      case 'convert':
+        return <ConvertPanel {...panelProps} />;
+      case 'calculator':
+        return <CalculatorPanel {...panelProps} />;
+      case 'formula':
+        return <FormulaPanel {...panelProps} />;
+      case 'groupBy':
+        return <GroupByPanel {...panelProps} />;
+      case 'join':
+        return <JoinPanel {...panelProps} />;
+      case 'union':
+        return <UnionPanel {...panelProps} />;
+      case 'sink':
+        return <SinkPanel {...panelProps} />;
+      default:
+        return null;
+    }
+  };
+
   return (
     <>
       <aside className={`config-drawer${open ? ' open' : ''}`}>
@@ -135,23 +167,21 @@ export default function ConfigDrawer({
               {meta.label} · {meta.desc}
             </div>
           </div>
+          <Tooltip title="放大编辑">
+            <Button
+              type="text"
+              size="small"
+              icon={<ExpandOutlined />}
+              disabled={!node}
+              onClick={() => setExpanded(true)}
+              aria-label="放大编辑"
+            />
+          </Tooltip>
           <Button type="text" size="small" icon={<CloseOutlined />} onClick={() => setSelected(null)} />
         </div>
 
         <div className="config-body">
-          {node ? (
-            <>
-              {node.data.kind === 'source' ? <SourcePanel {...panelProps} /> : null}
-              {node.data.kind === 'filter' ? <FilterPanel {...panelProps} /> : null}
-              {node.data.kind === 'convert' ? <ConvertPanel {...panelProps} /> : null}
-              {node.data.kind === 'calculator' ? <CalculatorPanel {...panelProps} /> : null}
-              {node.data.kind === 'formula' ? <FormulaPanel {...panelProps} /> : null}
-              {node.data.kind === 'groupBy' ? <GroupByPanel {...panelProps} /> : null}
-              {node.data.kind === 'join' ? <JoinPanel {...panelProps} /> : null}
-              {node.data.kind === 'union' ? <UnionPanel {...panelProps} /> : null}
-              {node.data.kind === 'sink' ? <SinkPanel {...panelProps} /> : null}
-            </>
-          ) : null}
+          {node && !expanded ? renderPanel() : null}
         </div>
 
         <div className="config-foot">
@@ -161,6 +191,35 @@ export default function ConfigDrawer({
           <span className="form-hint">修改后 2s 自动保存</span>
         </div>
       </aside>
+
+      <Modal
+        open={expanded && open}
+        onCancel={() => setExpanded(false)}
+        footer={null}
+        width="min(1200px, 92vw)"
+        title={
+          node
+            ? node.data.label === meta.label
+              ? meta.label
+              : `${node.data.label} · ${meta.label}`
+            : '节点配置'
+        }
+        className="config-modal"
+        styles={{ body: { maxHeight: '76vh', overflow: 'auto', paddingTop: 12 } }}
+      >
+        {/* 弹窗打开时抽屉内面板不渲染，关闭后内容卸载，保证同一时刻只有一个面板实例。 */}
+        {expanded && node ? (
+          <>
+            <div className="config-modal-inner">{renderPanel()}</div>
+            <div className="config-modal-foot">
+              <Button danger type="text" icon={<DeleteOutlined />} onClick={remove}>
+                删除节点
+              </Button>
+              <span className="form-hint">修改后 2s 自动保存</span>
+            </div>
+          </>
+        ) : null}
+      </Modal>
 
       <SqlModal
         open={sqlModal.open}

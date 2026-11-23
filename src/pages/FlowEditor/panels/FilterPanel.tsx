@@ -1,9 +1,9 @@
 import { useEffect } from 'react';
 import { Button, Checkbox, Input, InputNumber, Select, Space, Switch } from 'antd';
-import { CheckOutlined, MinusOutlined, TableOutlined } from '@ant-design/icons';
+import { CheckOutlined, HolderOutlined, MinusOutlined, TableOutlined } from '@ant-design/icons';
 import type { FieldDef, FilterConfig } from '../../../types';
 import { findUpstream, outputFields } from '../../../utils/dagUtils';
-import { NodeCommon, SectionTitle, WarningLine, type PanelProps } from './common';
+import { NodeCommon, SectionTitle, WarningLine, useDragSort, type PanelProps } from './common';
 import ConditionEditor from './ConditionEditor';
 import SqlPreview from './SqlPreview';
 
@@ -22,21 +22,29 @@ export default function FilterPanel({
   const upstream = findUpstream(node.id, nodes, edges);
   const upFields: FieldDef[] = upstream ? outputFields(upstream, nodes, edges) : [];
   const select = cfg.select || [];
+  const upSig = upFields.map((f) => `${f.name}:${f.type}`).join('|');
 
   useEffect(() => {
     if (!upFields.length) return;
-    const merged = upFields.map((f) => {
-      const row = select.find((s) => s.field === f.name);
-      return row
-        ? { ...row, type: f.type }
-        : { field: f.name, alias: f.name, keep: false, sort: '' as const, type: f.type };
-    });
-    const changed = merged.length !== select.length || merged.some((m, i) => select[i]?.field !== m.field);
+    const upByName = new Map(upFields.map((f) => [f.name, f]));
+    // 保留用户拖动后的既有顺序；上游新增字段追加到末尾，已不存在的字段移除。
+    const kept = select
+      .filter((s) => upByName.has(s.field))
+      .map((s) => ({ ...s, type: upByName.get(s.field)!.type }));
+    const keptNames = new Set(kept.map((s) => s.field));
+    const appended = upFields
+      .filter((f) => !keptNames.has(f.name))
+      .map((f) => ({ field: f.name, alias: f.name, keep: false, sort: '' as const, type: f.type }));
+    const merged = [...kept, ...appended];
+    const changed =
+      merged.length !== select.length ||
+      merged.some((m, i) => select[i]?.field !== m.field || (m.type || '') !== (select[i]?.type || ''));
     if (changed) (onConfigSilent || onConfig)({ ...cfg, select: merged });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [node.id, upFields.length]);
+  }, [node.id, upSig]);
 
   const patch = (p: Partial<FilterConfig>) => onConfig({ ...cfg, ...p });
+  const drag = useDragSort(select, (next) => patch({ select: next }));
   const updateSelect = (index: number, p: Partial<FilterConfig['select'][number]>) => {
     patch({ select: select.map((s, i) => (i === index ? { ...s, ...p } : s)) });
   };
@@ -94,15 +102,33 @@ export default function FilterPanel({
         >
           输出字段
         </SectionTitle>
+        <div className="form-hint" style={{ marginBottom: 6 }}>
+          拖动左侧手柄调整顺序，SQL 的 SELECT 与预览列按此顺序生成。
+        </div>
         <div className="field-table">
-          <div className="field-row field-row--head" style={{ gridTemplateColumns: '24px 1fr 84px 50px' }}>
+          <div className="field-row field-row--head" style={{ gridTemplateColumns: '20px 24px 1fr 84px 50px' }}>
+            <span />
             <span />
             <span>来源字段</span>
             <span>输出别名</span>
             <span>排序</span>
           </div>
           {select.map((row, index) => (
-            <div key={row.field} className="field-row" style={{ gridTemplateColumns: '24px 1fr 84px 50px' }}>
+            <div
+              key={row.field}
+              className={`field-row${drag.rowClass(index)}`}
+              style={{ gridTemplateColumns: '20px 24px 1fr 84px 50px' }}
+              {...drag.rowProps(index)}
+            >
+              <span
+                className="drag-handle"
+                role="button"
+                aria-label={`拖动调整字段 ${row.field} 的顺序`}
+                title="按住拖动调整顺序"
+                {...drag.handleProps(index)}
+              >
+                <HolderOutlined />
+              </span>
               <Checkbox
                 checked={row.keep}
                 onChange={(e) => updateSelect(index, { keep: e.target.checked })}

@@ -292,6 +292,18 @@ const KIND_BY_TYPE: Record<string, FlowNodeKind> = {
   sink: 'sink',
 };
 
+/** 节点改名前的默认显示名：仅当 label 仍是旧默认名时映射为新名，用户自定义名不覆盖。 */
+const LEGACY_NODE_LABELS: Partial<Record<FlowNodeKind, string[]>> = {
+  calculator: ['calculator', 'CALCULATOR', '计算器'],
+  formula: ['formula', 'FORMULA', '公式'],
+};
+
+export function displayLabel(kind: FlowNodeKind, raw: unknown): string {
+  const label = raw == null ? '' : String(raw);
+  if (!label.trim()) return NODE_META[kind].label;
+  return LEGACY_NODE_LABELS[kind]?.includes(label.trim()) ? NODE_META[kind].label : label;
+}
+
 function conditionRows(raw: unknown): ConditionRow[] {
   return ((raw as Json[] | undefined) || []).map((c) => ({
     logic: (c.logic as 'AND' | 'OR') || 'AND',
@@ -553,7 +565,7 @@ export function fromDagJson(rawDag: unknown): {
         y: needLayout || typeof pos?.y !== 'number' ? fallback.y : Number(pos?.y),
       },
       data: {
-        label: String(data.label ?? NODE_META[kind].label),
+        label: displayLabel(kind, data.label),
         kind,
         color: String(data.color ?? NODE_META[kind].color),
         config: reverseConfig(kind, (data.config || {}) as Json, id, edges),

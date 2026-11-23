@@ -186,7 +186,7 @@ export default function CalculatorPanel({
     return (
       <div>
         <NodeCommon node={node} onMeta={onMeta} />
-        <WarningLine>请先连接上游节点，计算器需要 1 条入线。</WarningLine>
+        <WarningLine>请先连接上游节点，简单公式计算列需要 1 条入线。</WarningLine>
       </div>
     );
   }

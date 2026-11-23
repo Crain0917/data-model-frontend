@@ -22,7 +22,7 @@ const RETURN_TYPES: Array<{ value: FormulaReturnType; label: string }> = [
   { value: 'INT', label: 'INT' },
 ];
 
-const GRID = '128px 260px 96px 58px 52px 96px 34px';
+const GRID = '128px minmax(260px, 1fr) 96px 58px 52px 96px 34px';
 const AGGREGATES = /\b(COUNT|AVG|MIN|MAX|GROUP_CONCAT|STDDEV\w*|VARIANCE|VAR_\w+|APPROX_COUNT_DISTINCT|PERCENTILE\w*|MEDIAN)\s*\(/i;
 
 interface Draft {
@@ -251,7 +251,7 @@ export default function FormulaPanel({
     return (
       <div>
         <NodeCommon node={node} onMeta={onMeta} />
-        <WarningLine>请先连接上游节点，公式需要 1 条入线。</WarningLine>
+        <WarningLine>请先连接上游节点，自由公式计算列需要 1 条入线。</WarningLine>
       </div>
     );
   }
@@ -316,7 +316,7 @@ export default function FormulaPanel({
                     size="small"
                     value={draft?.expression ?? row.expression}
                     placeholder="[a]+[b]+[c]+[d]"
-                    autoSize={{ minRows: 1, maxRows: 4 }}
+                    autoSize={{ minRows: 3, maxRows: 10 }}
                     onChange={(e) => setDraft(index, { expression: e.target.value })}
                     onBlur={() => commitRow(index)}
                     onKeyDown={(e) => onCtrlEnter(e, index)}
