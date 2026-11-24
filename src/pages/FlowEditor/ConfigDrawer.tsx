@@ -12,6 +12,10 @@ import FilterPanel from './panels/FilterPanel';
 import ConvertPanel from './panels/ConvertPanel';
 import CalculatorPanel from './panels/CalculatorPanel';
 import FormulaPanel from './panels/FormulaPanel';
+import ReplaceNullPanel from './panels/ReplaceNullPanel';
+import SortRowsPanel from './panels/SortRowsPanel';
+import SplitFieldsPanel from './panels/SplitFieldsPanel';
+import SplitToRowsPanel from './panels/SplitToRowsPanel';
 import GroupByPanel from './panels/GroupByPanel';
 import JoinPanel from './panels/JoinPanel';
 import UnionPanel from './panels/UnionPanel';
@@ -138,6 +142,14 @@ export default function ConfigDrawer({
         return <CalculatorPanel {...panelProps} />;
       case 'formula':
         return <FormulaPanel {...panelProps} />;
+      case 'replaceNull':
+        return <ReplaceNullPanel {...panelProps} />;
+      case 'sortRows':
+        return <SortRowsPanel {...panelProps} />;
+      case 'splitFields':
+        return <SplitFieldsPanel {...panelProps} />;
+      case 'splitFieldsToRows':
+        return <SplitToRowsPanel {...panelProps} />;
       case 'groupBy':
         return <GroupByPanel {...panelProps} />;
       case 'join':

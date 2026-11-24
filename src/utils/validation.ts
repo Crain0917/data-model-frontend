@@ -1,8 +1,19 @@
-import type { CalculatorRow, FlowEdge, FlowNode, FlowNodeKind } from '../types';
+import type { CalculatorRow, FieldDef, FlowEdge, FlowNode, FlowNodeKind } from '../types';
 import { isCalcRowComplete } from './calcOps';
-import { findUpstream, outputFields } from './dagUtils';
+import { findUpstream, isNumericType, outputFields } from './dagUtils';
 
-const SINGLE_INPUT: FlowNodeKind[] = ['filter', 'convert', 'calculator', 'formula', 'groupBy', 'sink'];
+const SINGLE_INPUT: FlowNodeKind[] = [
+  'filter',
+  'convert',
+  'calculator',
+  'formula',
+  'replaceNull',
+  'sortRows',
+  'splitFields',
+  'splitFieldsToRows',
+  'groupBy',
+  'sink',
+];
 
 const FORMULA_AGGREGATES =
   /\b(COUNT|AVG|MIN|MAX|GROUP_CONCAT|STDDEV\w*|VARIANCE|VAR_\w+|APPROX_COUNT_DISTINCT|PERCENTILE\w*|MEDIAN)\s*\(/i;
@@ -13,6 +24,10 @@ const KIND_LABEL: Partial<Record<FlowNodeKind, string>> = {
   convert: '类型转换',
   calculator: '简单公式计算列',
   formula: '自由公式计算列',
+  replaceNull: '替换缺失值',
+  sortRows: '排序',
+  splitFields: '拆分字段为多列',
+  splitFieldsToRows: '拆分字段为多行',
   groupBy: 'Group By',
   join: 'Join',
   union: 'Union',
@@ -202,6 +217,183 @@ function formulaIssues(
   return issues;
 }
 
+function upstreamFieldsOf(node: FlowNode, nodes: FlowNode[], edges: FlowEdge[]): FieldDef[] {
+  const upstream = findUpstream(node.id, nodes, edges);
+  return upstream ? outputFields(upstream, nodes, edges) : [];
+}
+
+function duplicateNames(names: string[]): string[] {
+  const counts = new Map<string, number>();
+  names.filter(Boolean).forEach((n) => counts.set(n.toLowerCase(), (counts.get(n.toLowerCase()) || 0) + 1));
+  return [...counts.entries()].filter(([, n]) => n > 1).map(([n]) => n);
+}
+
+function replaceNullIssues(
+  cfg: Record<string, any>,
+  node: FlowNode,
+  nodes: FlowNode[],
+  edges: FlowEdge[],
+): string[] {
+  const issues: string[] = [];
+  const rules = ((cfg.rules || []) as Array<Record<string, any>>).filter((r) =>
+    String(r.field || '').trim(),
+  );
+  if (!rules.length) return ['尚未配置任何替换规则'];
+  const upFields = upstreamFieldsOf(node, nodes, edges);
+  const typeOf = (name: string) =>
+    upFields.find((f) => f.name === name)?.type ||
+    upFields.find((f) => f.name.toLowerCase() === name.toLowerCase())?.type;
+  const missing = [...new Set(rules.filter((r) => !typeOf(String(r.field))).map((r) => String(r.field)))];
+  if (missing.length) issues.push(`字段不存在：${missing.join('、')}`);
+  const dups = duplicateNames(rules.map((r) => String(r.field)));
+  if (dups.length) issues.push(`同一字段重复配置：${dups.join('、')}`);
+  const nonNumeric = rules
+    .filter((r) => {
+      const strategy = String(r.strategy || 'VALUE').toUpperCase();
+      if (strategy === 'VALUE') return false;
+      const type = typeOf(String(r.field));
+      return Boolean(type) && !isNumericType(type);
+    })
+    .map((r) => String(r.field));
+  if (nonNumeric.length) issues.push(`非数字字段只能选择「自定义值」：${nonNumeric.join('、')}`);
+  const upNames = new Set(upFields.map((f) => f.name.toLowerCase()));
+  const added = rules
+    .map((r) => String(r.output || '').trim())
+    .filter((out, i) => out && out.toLowerCase() !== String(rules[i].field).toLowerCase());
+  const conflict = [...new Set(added.filter((o) => upNames.has(o.toLowerCase())))];
+  if (conflict.length) issues.push(`新增输出字段与上游重名：${conflict.join('、')}`);
+  const outDups = duplicateNames(added);
+  if (outDups.length) issues.push(`替换输出字段重名：${outDups.join('、')}`);
+  return issues;
+}
+
+function sortRowsIssues(
+  cfg: Record<string, any>,
+  node: FlowNode,
+  nodes: FlowNode[],
+  edges: FlowEdge[],
+): string[] {
+  const issues: string[] = [];
+  const upFields = upstreamFieldsOf(node, nodes, edges);
+  const has = (name: string) =>
+    upFields.some((f) => f.name === name || f.name.toLowerCase() === name.toLowerCase());
+  const seq = Boolean(cfg.sequenceEnabled);
+  const simple = Boolean(cfg.simpleEnabled);
+  const group = Boolean(cfg.groupEnabled);
+  const seqOut = String(cfg.sequenceOutput || '').trim();
+  const groupOut = String(cfg.groupOutput || '').trim();
+  const keys = ((cfg.keys || []) as Array<Record<string, any>>).filter((k) => String(k.field || '').trim());
+  const partitionBy = ((cfg.partitionBy || []) as string[]).filter(Boolean);
+  const groupOrderBy = ((cfg.groupOrderBy || []) as Array<Record<string, any>>).filter((k) =>
+    String(k.field || '').trim(),
+  );
+
+  if (seq) {
+    if (!seqOut) issues.push('顺序列名不能为空');
+    if (!simple && !group) issues.push('未启用简单排序或组内排序，顺序列不会生成');
+  }
+  if (simple) {
+    if (!keys.length) issues.push('简单排序至少需要 1 个排序字段');
+    const missing = [...new Set(keys.filter((k) => !has(String(k.field))).map((k) => String(k.field)))];
+    if (missing.length) issues.push(`排序字段不存在：${missing.join('、')}`);
+    const customEmpty = keys
+      .filter((k) => String(k.direction || 'ASC').toUpperCase() === 'CUSTOM')
+      .filter((k) => !((k.values || []) as unknown[]).some((v) => String(v ?? '').trim()))
+      .map((k) => String(k.field));
+    if (customEmpty.length) issues.push(`自定义排序缺少有序值：${customEmpty.join('、')}`);
+  }
+  if (group) {
+    if (!partitionBy.length) issues.push('组内排序至少需要 1 个分区字段');
+    const missingPart = [...new Set(partitionBy.filter((f) => !has(f)))];
+    if (missingPart.length) issues.push(`分区字段不存在：${missingPart.join('、')}`);
+    if (!groupOrderBy.length) issues.push('组内排序至少需要 1 个排序字段');
+    const missingOrder = [...new Set(groupOrderBy.filter((k) => !has(String(k.field))).map((k) => String(k.field)))];
+    if (missingOrder.length) issues.push(`组内排序字段不存在：${missingOrder.join('、')}`);
+    if (!groupOut) issues.push('组内名次列名不能为空');
+  }
+  const upNames = new Set(upFields.map((f) => f.name.toLowerCase()));
+  if (seqOut && upNames.has(seqOut.toLowerCase())) issues.push(`顺序列名与上游列重名：${seqOut}`);
+  if (groupOut && upNames.has(groupOut.toLowerCase())) issues.push(`组内名次列名与上游列重名：${groupOut}`);
+  if (seqOut && groupOut && seqOut.toLowerCase() === groupOut.toLowerCase()) {
+    issues.push('顺序列与组内名次列不能同名');
+  }
+  return issues;
+}
+
+function splitFieldsIssues(
+  cfg: Record<string, any>,
+  node: FlowNode,
+  nodes: FlowNode[],
+  edges: FlowEdge[],
+): string[] {
+  const issues: string[] = [];
+  const upFields = upstreamFieldsOf(node, nodes, edges);
+  const field = String(cfg.field || '').trim();
+  const delimiter = cfg.delimiter == null ? '' : String(cfg.delimiter);
+  const parts = ((cfg.parts || []) as Array<Record<string, any>>);
+  if (!field) issues.push('未选择拆分字段');
+  else if (!upFields.some((f) => f.name.toLowerCase() === field.toLowerCase())) {
+    issues.push(`字段不存在：${field}`);
+  }
+  if (!delimiter) issues.push('分隔符不能为空');
+  if (!parts.length) issues.push('至少配置 1 个输出片段');
+  const indices = parts.map((p) => Number(p.index));
+  if (indices.some((i) => !Number.isInteger(i) || i < 1)) issues.push('片段序号必须是从 1 开始的整数');
+  const dupIdx = duplicateNames(indices.map((i) => String(i)));
+  if (dupIdx.length) issues.push(`片段序号重复：${dupIdx.join('、')}`);
+  const outs = parts.map((p) => String(p.output || '').trim());
+  if (outs.some((o) => !o)) issues.push('片段输出列名不能为空');
+  const dupOut = duplicateNames(outs);
+  if (dupOut.length) issues.push(`片段输出列名重复：${dupOut.join('、')}`);
+  const remaining = cfg.keepOriginal === false
+    ? upFields.filter((f) => f.name.toLowerCase() !== field.toLowerCase())
+    : upFields;
+  const remainingNames = new Set(remaining.map((f) => f.name.toLowerCase()));
+  const conflict = [...new Set(outs.filter((o) => o && remainingNames.has(o.toLowerCase())))];
+  if (conflict.length) issues.push(`输出列与已有列重名：${conflict.join('、')}`);
+  return issues;
+}
+
+function splitToRowsIssues(
+  cfg: Record<string, any>,
+  node: FlowNode,
+  nodes: FlowNode[],
+  edges: FlowEdge[],
+): string[] {
+  const issues: string[] = [];
+  const upFields = upstreamFieldsOf(node, nodes, edges);
+  const field = String(cfg.field || '').trim();
+  const delimiter = cfg.delimiter == null ? '' : String(cfg.delimiter);
+  const output = String(cfg.output || '').trim();
+  const position = String(cfg.positionOutput || '').trim();
+  if (!field) issues.push('未选择拆分字段');
+  else if (!upFields.some((f) => f.name.toLowerCase() === field.toLowerCase())) {
+    issues.push(`字段不存在：${field}`);
+  }
+  if (!delimiter) issues.push('分隔符不能为空');
+  if (!output) issues.push('拆分值输出列名不能为空');
+  const inPlace = Boolean(field) && output.toLowerCase() === field.toLowerCase();
+  let resultNames: string[];
+  if (inPlace) {
+    resultNames = upFields.map((f) => f.name);
+  } else {
+    const remaining = cfg.keepOriginal === false
+      ? upFields.filter((f) => f.name.toLowerCase() !== field.toLowerCase())
+      : upFields;
+    const remainingNames = new Set(remaining.map((f) => f.name.toLowerCase()));
+    if (output && remainingNames.has(output.toLowerCase())) {
+      issues.push(`输出列与已有列重名：${output}`);
+    }
+    resultNames = [...remaining.map((f) => f.name), output];
+  }
+  if (position) {
+    if (resultNames.some((n) => n.toLowerCase() === position.toLowerCase())) {
+      issues.push(`序号列与已有列重名：${position}`);
+    }
+  }
+  return issues;
+}
+
 export function dagWarnings(nodes: FlowNode[], edges: FlowEdge[]): string[] {
   const warnings: string[] = [];
   for (const node of nodes) {
@@ -229,6 +421,26 @@ export function dagWarnings(nodes: FlowNode[], edges: FlowEdge[]): string[] {
     }
     if (node.data.kind === 'formula') {
       for (const issue of formulaIssues(cfg, node, nodes, edges)) {
+        warnings.push(`节点「${node.data.label}」${issue}`);
+      }
+    }
+    if (node.data.kind === 'replaceNull') {
+      for (const issue of replaceNullIssues(cfg, node, nodes, edges)) {
+        warnings.push(`节点「${node.data.label}」${issue}`);
+      }
+    }
+    if (node.data.kind === 'sortRows') {
+      for (const issue of sortRowsIssues(cfg, node, nodes, edges)) {
+        warnings.push(`节点「${node.data.label}」${issue}`);
+      }
+    }
+    if (node.data.kind === 'splitFields') {
+      for (const issue of splitFieldsIssues(cfg, node, nodes, edges)) {
+        warnings.push(`节点「${node.data.label}」${issue}`);
+      }
+    }
+    if (node.data.kind === 'splitFieldsToRows') {
+      for (const issue of splitToRowsIssues(cfg, node, nodes, edges)) {
         warnings.push(`节点「${node.data.label}」${issue}`);
       }
     }
@@ -272,6 +484,22 @@ export function nodeWarning(node: FlowNode, nodes: FlowNode[], edges: FlowEdge[]
     }
     case 'formula': {
       const issues = formulaIssues(cfg, node, nodes, edges);
+      return issues.length ? issues[0] : null;
+    }
+    case 'replaceNull': {
+      const issues = replaceNullIssues(cfg, node, nodes, edges);
+      return issues.length ? issues[0] : null;
+    }
+    case 'sortRows': {
+      const issues = sortRowsIssues(cfg, node, nodes, edges);
+      return issues.length ? issues[0] : null;
+    }
+    case 'splitFields': {
+      const issues = splitFieldsIssues(cfg, node, nodes, edges);
+      return issues.length ? issues[0] : null;
+    }
+    case 'splitFieldsToRows': {
+      const issues = splitToRowsIssues(cfg, node, nodes, edges);
       return issues.length ? issues[0] : null;
     }
     case 'groupBy':

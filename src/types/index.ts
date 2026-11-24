@@ -63,6 +63,10 @@ export type FlowNodeKind =
   | 'convert'
   | 'calculator'
   | 'formula'
+  | 'replaceNull'
+  | 'sortRows'
+  | 'splitFields'
+  | 'splitFieldsToRows'
   | 'groupBy'
   | 'join'
   | 'union'
@@ -253,6 +257,82 @@ export interface FormulaConfig {
   formulas: FormulaRow[];
 }
 
+export type NullStrategy = 'VALUE' | 'MAX' | 'MIN' | 'AVG' | 'MEDIAN' | 'MODE';
+
+/** 契约字段名冻结，见 需求-2026-11-23-新增算子 §1。 */
+export interface ReplaceNullRule {
+  field: string;
+  strategy: NullStrategy;
+  /** strategy=VALUE 时的替换值，字符串形式提交 */
+  value: string;
+  /** 空或等于 field = 原地替换 */
+  output: string;
+  treatEmptyAsNull: boolean;
+}
+
+export interface ReplaceNullConfig {
+  alias: string;
+  rules: ReplaceNullRule[];
+}
+
+export type SortDirection = 'ASC' | 'DESC' | 'CUSTOM';
+
+export interface SortKey {
+  field: string;
+  direction: SortDirection;
+  /** direction=CUSTOM 时的有序值列表，未列出的值排最后 */
+  values?: string[];
+}
+
+export interface GroupOrderKey {
+  field: string;
+  direction: 'ASC' | 'DESC';
+}
+
+export type GroupRankFunction = 'ROW_NUMBER' | 'RANK' | 'DENSE_RANK';
+
+/** 契约字段名冻结，见 需求-2026-11-23-新增算子 §2。 */
+export interface SortRowsConfig {
+  alias: string;
+  sequenceEnabled: boolean;
+  sequenceOutput: string;
+  simpleEnabled: boolean;
+  keys: SortKey[];
+  groupEnabled: boolean;
+  partitionBy: string[];
+  groupOrderBy: GroupOrderKey[];
+  groupFunction: GroupRankFunction;
+  groupOutput: string;
+}
+
+export interface SplitFieldPart {
+  index: number;
+  output: string;
+}
+
+/** 契约字段名冻结，见 需求-2026-11-23-新增算子 §3a。 */
+export interface SplitFieldsConfig {
+  alias: string;
+  field: string;
+  delimiter: string;
+  keepOriginal: boolean;
+  trim: boolean;
+  emptyAsNull: boolean;
+  parts: SplitFieldPart[];
+}
+
+/** 契约字段名冻结，见 需求-2026-11-23-新增算子 §3b。 */
+export interface SplitFieldsToRowsConfig {
+  alias: string;
+  field: string;
+  delimiter: string;
+  output: string;
+  keepOriginal: boolean;
+  trim: boolean;
+  dropEmpty: boolean;
+  positionOutput: string;
+}
+
 export interface GroupByConfig {
   alias: string;
   globalAgg: boolean;
@@ -318,6 +398,10 @@ export type AnyNodeConfig =
   | ConvertConfig
   | CalculatorConfig
   | FormulaConfig
+  | ReplaceNullConfig
+  | SortRowsConfig
+  | SplitFieldsConfig
+  | SplitFieldsToRowsConfig
   | GroupByConfig
   | JoinConfig
   | UnionConfig

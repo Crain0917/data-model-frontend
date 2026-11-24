@@ -36,6 +36,10 @@ const NODE_TYPE: Record<string, string> = {
   convert: 'convert',
   calculator: 'calculator',
   formula: 'formula',
+  replaceNull: 'replace_null',
+  sortRows: 'sort_rows',
+  splitFields: 'split_fields',
+  splitFieldsToRows: 'split_fields_to_rows',
   groupBy: 'groupby',
   join: 'join',
   union: 'union',
@@ -165,6 +169,75 @@ function toConfig(node: FlowNode, edges: FlowEdge[]): Json {
           }))
           .filter((f) => f.output || f.expression),
       };
+    case 'replaceNull':
+      return {
+        alias: cfg.alias ?? 'a',
+        rules: ((cfg.rules as Json[]) || [])
+          .map((r) => ({
+            field: String(r.field ?? '').trim(),
+            strategy: String(r.strategy ?? 'VALUE').toUpperCase(),
+            value: r.value == null ? '' : String(r.value),
+            output: r.output == null ? '' : String(r.output).trim(),
+            treatEmptyAsNull: Boolean(r.treatEmptyAsNull),
+          }))
+          .filter((r) => r.field),
+      };
+    case 'sortRows':
+      return {
+        alias: cfg.alias ?? 'a',
+        sequenceEnabled: Boolean(cfg.sequenceEnabled),
+        sequenceOutput: String(cfg.sequenceOutput ?? '').trim(),
+        simpleEnabled: Boolean(cfg.simpleEnabled),
+        keys: ((cfg.keys as Json[]) || [])
+          .map((k) => {
+            const direction = String(k.direction || 'ASC').toUpperCase();
+            const key: Json = { field: String(k.field ?? ''), direction };
+            if (direction === 'CUSTOM') {
+              key.values = (Array.isArray(k.values) ? (k.values as unknown[]) : [])
+                .map((v) => String(v ?? ''))
+                .filter((v) => v !== '');
+            }
+            return key;
+          })
+          .filter((k) => k.field),
+        groupEnabled: Boolean(cfg.groupEnabled),
+        partitionBy: ((cfg.partitionBy as unknown[]) || []).map((v) => String(v ?? '')).filter(Boolean),
+        groupOrderBy: ((cfg.groupOrderBy as Json[]) || [])
+          .map((k) => ({
+            field: String(k.field ?? ''),
+            direction: String(k.direction || 'ASC').toUpperCase() === 'DESC' ? 'DESC' : 'ASC',
+          }))
+          .filter((k) => k.field),
+        groupFunction: ['ROW_NUMBER', 'RANK', 'DENSE_RANK'].includes(
+          String(cfg.groupFunction ?? 'ROW_NUMBER').toUpperCase(),
+        )
+          ? String(cfg.groupFunction ?? 'ROW_NUMBER').toUpperCase()
+          : 'ROW_NUMBER',
+        groupOutput: String(cfg.groupOutput ?? '').trim(),
+      };
+    case 'splitFields':
+      return {
+        alias: cfg.alias ?? 'a',
+        field: String(cfg.field ?? ''),
+        delimiter: cfg.delimiter == null ? '' : String(cfg.delimiter),
+        keepOriginal: cfg.keepOriginal !== false,
+        trim: cfg.trim !== false,
+        emptyAsNull: Boolean(cfg.emptyAsNull),
+        parts: ((cfg.parts as Json[]) || [])
+          .map((p) => ({ index: Number(p.index) || 0, output: String(p.output ?? '').trim() }))
+          .filter((p) => p.index > 0),
+      };
+    case 'splitFieldsToRows':
+      return {
+        alias: cfg.alias ?? 'a',
+        field: String(cfg.field ?? ''),
+        delimiter: cfg.delimiter == null ? '' : String(cfg.delimiter),
+        output: String(cfg.output ?? '').trim(),
+        keepOriginal: cfg.keepOriginal !== false,
+        trim: cfg.trim !== false,
+        dropEmpty: Boolean(cfg.dropEmpty),
+        positionOutput: String(cfg.positionOutput ?? '').trim(),
+      };
     case 'groupBy':
       return {
         alias: cfg.alias ?? 'a',
@@ -285,6 +358,10 @@ const KIND_BY_TYPE: Record<string, FlowNodeKind> = {
   convert: 'convert',
   calculator: 'calculator',
   formula: 'formula',
+  replace_null: 'replaceNull',
+  sort_rows: 'sortRows',
+  split_fields: 'splitFields',
+  split_fields_to_rows: 'splitFieldsToRows',
   groupby: 'groupBy',
   groupBy: 'groupBy',
   join: 'join',
@@ -389,6 +466,75 @@ function reverseConfig(kind: FlowNodeKind, raw: Json, nodeId: string, edges: Flo
           length: (f.length as number | null) ?? null,
           precision: (f.precision as number | null) ?? null,
         })),
+      };
+    case 'replaceNull':
+      return {
+        alias: raw.alias ?? 'a',
+        rules: ((raw.rules as Json[] | undefined) || [])
+          .map((r) => ({
+            field: String(r.field ?? '').trim(),
+            strategy: String(r.strategy ?? 'VALUE').toUpperCase(),
+            value: r.value == null ? '' : String(r.value),
+            output: r.output == null ? '' : String(r.output),
+            treatEmptyAsNull: Boolean(r.treatEmptyAsNull),
+          }))
+          .filter((r) => r.field),
+      };
+    case 'sortRows':
+      return {
+        alias: raw.alias ?? 'a',
+        sequenceEnabled: Boolean(raw.sequenceEnabled),
+        sequenceOutput: String(raw.sequenceOutput ?? ''),
+        simpleEnabled: Boolean(raw.simpleEnabled),
+        keys: ((raw.keys as Json[] | undefined) || [])
+          .map((k) => ({
+            field: String(k.field ?? ''),
+            direction: (String(k.direction || 'ASC').toUpperCase() as 'ASC' | 'DESC' | 'CUSTOM'),
+            values: Array.isArray(k.values) ? (k.values as unknown[]).map((v) => String(v ?? '')) : undefined,
+          }))
+          .filter((k) => k.field),
+        groupEnabled: Boolean(raw.groupEnabled),
+        partitionBy: Array.isArray(raw.partitionBy)
+          ? (raw.partitionBy as unknown[]).map((v) => String(v ?? '')).filter(Boolean)
+          : [],
+        groupOrderBy: ((raw.groupOrderBy as Json[] | undefined) || [])
+          .map((k) => ({
+            field: String(k.field ?? ''),
+            direction: (String(k.direction || 'ASC').toUpperCase() === 'DESC' ? 'DESC' : 'ASC') as 'ASC' | 'DESC',
+          }))
+          .filter((k) => k.field),
+        groupFunction: (() => {
+          const fn = String(raw.groupFunction ?? 'ROW_NUMBER').toUpperCase();
+          return (['ROW_NUMBER', 'RANK', 'DENSE_RANK'].includes(fn) ? fn : 'ROW_NUMBER') as
+            | 'ROW_NUMBER'
+            | 'RANK'
+            | 'DENSE_RANK';
+        })(),
+        groupOutput: String(raw.groupOutput ?? ''),
+      };
+    case 'splitFields':
+      return {
+        alias: raw.alias ?? 'a',
+        field: String(raw.field ?? ''),
+        delimiter: raw.delimiter == null ? '' : String(raw.delimiter),
+        keepOriginal: raw.keepOriginal !== false,
+        trim: raw.trim !== false,
+        emptyAsNull: Boolean(raw.emptyAsNull),
+        parts: ((raw.parts as Json[] | undefined) || []).map((p) => ({
+          index: Number(p.index) || 0,
+          output: String(p.output ?? ''),
+        })),
+      };
+    case 'splitFieldsToRows':
+      return {
+        alias: raw.alias ?? 'a',
+        field: String(raw.field ?? ''),
+        delimiter: raw.delimiter == null ? '' : String(raw.delimiter),
+        output: String(raw.output ?? ''),
+        keepOriginal: raw.keepOriginal !== false,
+        trim: raw.trim !== false,
+        dropEmpty: Boolean(raw.dropEmpty),
+        positionOutput: String(raw.positionOutput ?? ''),
       };
     case 'groupBy':
       return {

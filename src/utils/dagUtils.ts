@@ -13,6 +13,11 @@ import type {
   FormulaRow,
   GroupByConfig,
   JoinConfig,
+  ReplaceNullConfig,
+  ReplaceNullRule,
+  SortRowsConfig,
+  SplitFieldsConfig,
+  SplitFieldsToRowsConfig,
   UnionConfig,
 } from '../types';
 import { DEFAULT_NODE_NAME, NODE_META } from './nodeMeta';
@@ -41,6 +46,42 @@ export function defaultConfig(kind: FlowNodeKind): Record<string, unknown> {
       return { alias: 'a', calculations: [] };
     case 'formula':
       return { alias: 'a', formulas: [] };
+    case 'replaceNull':
+      return { alias: 'a', rules: [] };
+    case 'sortRows':
+      return {
+        alias: 'a',
+        sequenceEnabled: false,
+        sequenceOutput: '',
+        simpleEnabled: false,
+        keys: [],
+        groupEnabled: false,
+        partitionBy: [],
+        groupOrderBy: [],
+        groupFunction: 'ROW_NUMBER',
+        groupOutput: '',
+      };
+    case 'splitFields':
+      return {
+        alias: 'a',
+        field: '',
+        delimiter: '',
+        keepOriginal: true,
+        trim: true,
+        emptyAsNull: false,
+        parts: [],
+      };
+    case 'splitFieldsToRows':
+      return {
+        alias: 'a',
+        field: '',
+        delimiter: '',
+        output: '',
+        keepOriginal: true,
+        trim: true,
+        dropEmpty: false,
+        positionOutput: '',
+      };
     case 'groupBy':
       return {
         alias: 'a',
@@ -165,6 +206,25 @@ function formulaOutputType(row: FormulaRow): string {
   }
 }
 
+const NUMERIC_TYPE_RE =
+  /^(TINYINT|SMALLINT|INT|INTEGER|BIGINT|LARGEINT|FLOAT|DOUBLE|DECIMAL|NUMERIC|NUMBER|REAL)/i;
+
+/** 与后端数字类型判断覆盖范围一致（INT/BIGINT/LARGEINT/SMALLINT/TINYINT/DOUBLE/FLOAT/DECIMAL 等）。 */
+export function isNumericType(type?: string | null): boolean {
+  if (!type) return false;
+  return NUMERIC_TYPE_RE.test(String(type).trim());
+}
+
+function ruleReplacesInPlace(rule: ReplaceNullRule): boolean {
+  const out = String(rule.output || '').trim();
+  return !out || out.toLowerCase() === String(rule.field || '').trim().toLowerCase();
+}
+
+function replaceNullOutputType(rule: ReplaceNullRule, sourceType: string): string {
+  const strategy = String(rule.strategy || 'VALUE').toUpperCase();
+  return strategy === 'AVG' || strategy === 'MEDIAN' ? 'DOUBLE' : sourceType;
+}
+
 export function outputFields(node: FlowNode, nodes: FlowNode[], edges: FlowEdge[], depth = 0): FieldDef[] {
   if (depth > 12) return [];
   const cfg = node.data.config as Record<string, any>;
@@ -218,6 +278,79 @@ export function outputFields(node: FlowNode, nodes: FlowNode[], edges: FlowEdge[
         .filter((row) => String(row.output || '').trim())
         .map((row) => ({ name: row.output.trim(), type: formulaOutputType(row) }));
       return [...upFields, ...added];
+    }
+    case 'replaceNull': {
+      const r = cfg as ReplaceNullConfig;
+      const upstream = findUpstream(node.id, nodes, edges);
+      const upFields = upstream ? outputFields(upstream, nodes, edges, depth + 1) : [];
+      const rules = (r.rules || []).filter((row) => String(row.field || '').trim());
+      const findRule = (name: string): ReplaceNullRule | undefined =>
+        rules.find((row) => row.field === name) ||
+        rules.find((row) => row.field.toLowerCase() === name.toLowerCase());
+      const inPlace = upFields.map((field) => {
+        const rule = findRule(field.name);
+        if (!rule || !ruleReplacesInPlace(rule)) return field;
+        return { name: field.name, type: replaceNullOutputType(rule, field.type) };
+      });
+      const added = rules
+        .filter((rule) => !ruleReplacesInPlace(rule))
+        .map((rule) => {
+          const src = upFields.find((f) => f.name === rule.field);
+          return {
+            name: String(rule.output).trim(),
+            type: replaceNullOutputType(rule, src?.type || 'STRING'),
+          };
+        });
+      return [...inPlace, ...added];
+    }
+    case 'sortRows': {
+      const s = cfg as SortRowsConfig;
+      const upstream = findUpstream(node.id, nodes, edges);
+      const upFields = upstream ? outputFields(upstream, nodes, edges, depth + 1) : [];
+      const result = [...upFields];
+      const simpleKeys = (s.keys || []).filter((key) => String(key.field || '').trim());
+      const hasFinalOrder = (s.simpleEnabled && simpleKeys.length > 0) || s.groupEnabled;
+      if (s.sequenceEnabled && hasFinalOrder && String(s.sequenceOutput || '').trim()) {
+        result.push({ name: String(s.sequenceOutput).trim(), type: 'BIGINT' });
+      }
+      if (s.groupEnabled && String(s.groupOutput || '').trim()) {
+        result.push({ name: String(s.groupOutput).trim(), type: 'BIGINT' });
+      }
+      return result;
+    }
+    case 'splitFields': {
+      const s = cfg as SplitFieldsConfig;
+      const upstream = findUpstream(node.id, nodes, edges);
+      const upFields = upstream ? outputFields(upstream, nodes, edges, depth + 1) : [];
+      const base = s.keepOriginal === false
+        ? upFields.filter((f) => f.name.toLowerCase() !== String(s.field || '').toLowerCase())
+        : upFields;
+      const added = (s.parts || [])
+        .filter((p) => String(p.output || '').trim())
+        .map((p) => ({ name: String(p.output).trim(), type: 'STRING' }));
+      return [...base, ...added];
+    }
+    case 'splitFieldsToRows': {
+      const s = cfg as SplitFieldsToRowsConfig;
+      const upstream = findUpstream(node.id, nodes, edges);
+      const upFields = upstream ? outputFields(upstream, nodes, edges, depth + 1) : [];
+      const field = String(s.field || '').trim();
+      const out = String(s.output || '').trim() || field;
+      const inPlace = Boolean(field) && out.toLowerCase() === field.toLowerCase();
+      let result: FieldDef[];
+      if (inPlace) {
+        result = upFields.map((f) =>
+          f.name.toLowerCase() === field.toLowerCase() ? { name: f.name, type: 'STRING' } : f,
+        );
+      } else {
+        const base = s.keepOriginal === false
+          ? upFields.filter((f) => f.name.toLowerCase() !== field.toLowerCase())
+          : upFields;
+        result = [...base, { name: out, type: 'STRING' }];
+      }
+      const position = String(s.positionOutput || '').trim();
+      if (position) result = [...result, { name: position, type: 'BIGINT' }];
+      return result;
     }
     case 'groupBy': {
       const g = cfg as GroupByConfig;

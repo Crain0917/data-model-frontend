@@ -1409,6 +1409,69 @@ html[data-theme='dark'] .sink-node {
   border-radius: 4px;
   padding: 1px 5px;
 }
+.panel-block {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 10px 12px;
+  background: var(--bg-subtle);
+}
+.panel-block .field-table {
+  background: var(--bg-elevated);
+}
+.sort-values-block {
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+}
+.sort-values {
+  margin-top: 4px;
+}
+.sort-values .field-row {
+  padding: 4px;
+  border-bottom: none;
+}
+.rank-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 6px;
+}
+.rank-option {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  align-items: flex-start;
+  text-align: left;
+  padding: 8px 9px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.rank-option:hover {
+  border-color: var(--color-primary);
+}
+.rank-option.active {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+  color: var(--text-primary);
+}
+.rank-option-name {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 650;
+}
+.rank-option-desc {
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--text-tertiary);
+}
+.rank-option.active .rank-option-desc {
+  color: var(--text-secondary);
+}
 .sql-preview {
   background: var(--bg-inset);
   border: 1px solid var(--border);
