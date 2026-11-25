@@ -9,6 +9,7 @@ import type {
   FlowRun,
 } from '../../../types';
 import { NODE_COLORS } from '../../../utils/nodeMeta';
+import { displayDorisType } from '../../../utils/dorisType';
 
 export interface PanelProps {
   node: FlowNode;
@@ -84,7 +85,7 @@ export function DangerLine({ children }: { children: ReactNode }) {
 }
 
 export function fieldOptions(fields: FieldDef[]) {
-  return fields.map((f) => ({ value: f.name, label: `${f.name}  ·  ${f.type}` }));
+  return fields.map((f) => ({ value: f.name, label: `${f.name}  ·  ${displayDorisType(f.type)}` }));
 }
 
 /**

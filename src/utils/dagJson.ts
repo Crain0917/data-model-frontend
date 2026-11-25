@@ -40,6 +40,10 @@ const NODE_TYPE: Record<string, string> = {
   sortRows: 'sort_rows',
   splitFields: 'split_fields',
   splitFieldsToRows: 'split_fields_to_rows',
+  valueMapper: 'value_mapper',
+  uniqueRows: 'unique_rows',
+  columnsToRows: 'columns_to_rows',
+  rowsToColumns: 'rows_to_columns',
   groupBy: 'groupby',
   join: 'join',
   union: 'union',
@@ -178,7 +182,6 @@ function toConfig(node: FlowNode, edges: FlowEdge[]): Json {
             strategy: String(r.strategy ?? 'VALUE').toUpperCase(),
             value: r.value == null ? '' : String(r.value),
             output: r.output == null ? '' : String(r.output).trim(),
-            treatEmptyAsNull: Boolean(r.treatEmptyAsNull),
           }))
           .filter((r) => r.field),
       };
@@ -238,6 +241,99 @@ function toConfig(node: FlowNode, edges: FlowEdge[]): Json {
         dropEmpty: Boolean(cfg.dropEmpty),
         positionOutput: String(cfg.positionOutput ?? '').trim(),
       };
+    case 'valueMapper': {
+      return {
+        alias: cfg.alias ?? 'a',
+        rules: ((cfg.rules as Json[]) || [])
+          .map((r) => ({
+            field: String(r.field ?? '').trim(),
+            output: r.output == null ? '' : String(r.output).trim(),
+            mappings: ((r.mappings as Json[]) || []).map((m) => ({
+              from: m.from == null ? '' : String(m.from),
+              to: m.to == null ? '' : String(m.to),
+            })),
+            unmatched: ['KEEP', 'VALUE', 'NULL'].includes(
+              String(r.unmatched ?? '').toUpperCase(),
+            )
+              ? String(r.unmatched).toUpperCase()
+              : 'KEEP',
+            unmatchedValue: r.unmatchedValue == null ? '' : String(r.unmatchedValue),
+          }))
+          .filter((r) => r.field),
+      };
+    }
+    case 'uniqueRows': {
+      const mode = String(cfg.mode ?? 'SIMPLE').toUpperCase() === 'RULE' ? 'RULE' : 'SIMPLE';
+      const duplicateOutput =
+        String(cfg.duplicateOutput ?? 'DISCARD').toUpperCase() === 'TABLE' ? 'TABLE' : 'DISCARD';
+      const target = (cfg.duplicateTarget as Json | undefined) || {};
+      return {
+        alias: cfg.alias ?? 'a',
+        mode,
+        keyFields: ((cfg.keyFields as unknown[]) || [])
+          .map((v) => String(v ?? '').trim())
+          .filter(Boolean),
+        ignoreCase: Boolean(cfg.ignoreCase),
+        orderBy: ((cfg.orderBy as Json[]) || [])
+          .map((k) => ({
+            field: String(k.field ?? '').trim(),
+            direction: String(k.direction ?? 'ASC').toUpperCase() === 'DESC' ? 'DESC' : 'ASC',
+          }))
+          .filter((k) => k.field),
+        duplicateOutput,
+        duplicateTarget: {
+          dataSourceId: target.dataSourceId ?? null,
+          tableName: String(target.tableName ?? '').trim(),
+          writeMode: String(target.writeMode ?? 'APPEND').toUpperCase() === 'OVERWRITE' ? 'OVERWRITE' : 'APPEND',
+          autoCreate: target.autoCreate !== false,
+        },
+      };
+    }
+    case 'columnsToRows': {
+      const valueType = ['STRING', 'DOUBLE', 'BIGINT'].includes(
+        String(cfg.valueType ?? '').toUpperCase(),
+      )
+        ? String(cfg.valueType).toUpperCase()
+        : 'STRING';
+      return {
+        alias: cfg.alias ?? 'a',
+        keepFields: ((cfg.keepFields as unknown[]) || [])
+          .map((v) => String(v ?? '').trim())
+          .filter(Boolean),
+        valueFields: ((cfg.valueFields as Json[]) || [])
+          .map((v) => ({
+            field: String(v.field ?? '').trim(),
+            label: v.label == null ? '' : String(v.label),
+          }))
+          .filter((v) => v.field),
+        nameOutput: String(cfg.nameOutput ?? '').trim() || 'field_name',
+        valueOutput: String(cfg.valueOutput ?? '').trim() || 'field_value',
+        valueType,
+        skipNull: Boolean(cfg.skipNull),
+      };
+    }
+    case 'rowsToColumns': {
+      const aggregate = ['SUM', 'MAX', 'MIN', 'AVG', 'COUNT'].includes(
+        String(cfg.aggregate ?? '').toUpperCase(),
+      )
+        ? String(cfg.aggregate).toUpperCase()
+        : 'SUM';
+      return {
+        alias: cfg.alias ?? 'a',
+        groupFields: ((cfg.groupFields as unknown[]) || [])
+          .map((v) => String(v ?? '').trim())
+          .filter(Boolean),
+        pivotField: String(cfg.pivotField ?? '').trim(),
+        valueField: String(cfg.valueField ?? '').trim(),
+        aggregate,
+        pivotValues: ((cfg.pivotValues as Json[]) || [])
+          .map((p) => ({
+            value: p.value == null ? '' : String(p.value),
+            output: String(p.output ?? '').trim(),
+          }))
+          .filter((p) => p.output || p.value),
+      };
+    }
     case 'groupBy':
       return {
         alias: cfg.alias ?? 'a',
@@ -362,6 +458,10 @@ const KIND_BY_TYPE: Record<string, FlowNodeKind> = {
   sort_rows: 'sortRows',
   split_fields: 'splitFields',
   split_fields_to_rows: 'splitFieldsToRows',
+  value_mapper: 'valueMapper',
+  unique_rows: 'uniqueRows',
+  columns_to_rows: 'columnsToRows',
+  rows_to_columns: 'rowsToColumns',
   groupby: 'groupBy',
   groupBy: 'groupBy',
   join: 'join',
@@ -401,7 +501,11 @@ function reverseConfig(kind: FlowNodeKind, raw: Json, nodeId: string, edges: Flo
         dataSourceName: raw.dataSourceName,
         dbName: raw.dbName,
         tableName: raw.tableName ?? '',
-        fields: ((raw.fields as FieldDef[] | undefined) || []).map((f) => ({ name: f.name, type: f.type })),
+        fields: ((raw.fields as FieldDef[] | undefined) || []).map((f) => ({
+          name: f.name,
+          type: f.type,
+          ...(f.sourceType ? { sourceType: f.sourceType } : {}),
+        })),
         filter: { conditions: conditionRows((raw.filter as Json | undefined)?.conditions) },
       };
     case 'filter':
@@ -476,7 +580,6 @@ function reverseConfig(kind: FlowNodeKind, raw: Json, nodeId: string, edges: Flo
             strategy: String(r.strategy ?? 'VALUE').toUpperCase(),
             value: r.value == null ? '' : String(r.value),
             output: r.output == null ? '' : String(r.output),
-            treatEmptyAsNull: Boolean(r.treatEmptyAsNull),
           }))
           .filter((r) => r.field),
       };
@@ -536,6 +639,99 @@ function reverseConfig(kind: FlowNodeKind, raw: Json, nodeId: string, edges: Flo
         dropEmpty: Boolean(raw.dropEmpty),
         positionOutput: String(raw.positionOutput ?? ''),
       };
+    case 'valueMapper':
+      return {
+        alias: raw.alias ?? 'a',
+        rules: ((raw.rules as Json[] | undefined) || [])
+          .map((r) => ({
+            field: String(r.field ?? '').trim(),
+            output: String(r.output ?? ''),
+            mappings: ((r.mappings as Json[] | undefined) || []).map((m) => ({
+              from: String(m.from ?? ''),
+              to: String(m.to ?? ''),
+            })),
+            unmatched: (() => {
+              const value = String(r.unmatched ?? 'KEEP').toUpperCase();
+              return (['KEEP', 'VALUE', 'NULL'].includes(value) ? value : 'KEEP') as
+                | 'KEEP'
+                | 'VALUE'
+                | 'NULL';
+            })(),
+            unmatchedValue: r.unmatchedValue == null ? '' : String(r.unmatchedValue),
+          }))
+          .filter((r) => r.field),
+      };
+    case 'uniqueRows': {
+      const target = (raw.duplicateTarget as Json | undefined) || {};
+      return {
+        alias: raw.alias ?? 'a',
+        mode: String(raw.mode ?? 'SIMPLE').toUpperCase() === 'RULE' ? 'RULE' : 'SIMPLE',
+        keyFields: ((raw.keyFields as unknown[] | undefined) || [])
+          .map((v) => String(v ?? '').trim())
+          .filter(Boolean),
+        ignoreCase: Boolean(raw.ignoreCase),
+        orderBy: ((raw.orderBy as Json[] | undefined) || [])
+          .map((k) => ({
+            field: String(k.field ?? '').trim(),
+            direction: (String(k.direction ?? 'ASC').toUpperCase() === 'DESC' ? 'DESC' : 'ASC') as
+              | 'ASC'
+              | 'DESC',
+          }))
+          .filter((k) => k.field),
+        duplicateOutput:
+          String(raw.duplicateOutput ?? 'DISCARD').toUpperCase() === 'TABLE' ? 'TABLE' : 'DISCARD',
+        duplicateTarget: {
+          dataSourceId: (target.dataSourceId as number | null) ?? null,
+          tableName: String(target.tableName ?? ''),
+          writeMode: String(target.writeMode ?? 'APPEND').toUpperCase() === 'OVERWRITE' ? 'OVERWRITE' : 'APPEND',
+          autoCreate: target.autoCreate !== false,
+        },
+      };
+    }
+    case 'columnsToRows': {
+      const valueType = ['STRING', 'DOUBLE', 'BIGINT'].includes(
+        String(raw.valueType ?? '').toUpperCase(),
+      )
+        ? (String(raw.valueType).toUpperCase() as 'STRING' | 'DOUBLE' | 'BIGINT')
+        : 'STRING';
+      return {
+        alias: raw.alias ?? 'a',
+        keepFields: ((raw.keepFields as unknown[] | undefined) || [])
+          .map((v) => String(v ?? '').trim())
+          .filter(Boolean),
+        valueFields: ((raw.valueFields as Json[] | undefined) || [])
+          .map((v) => ({
+            field: String(v.field ?? ''),
+            label: v.label == null ? '' : String(v.label),
+          }))
+          .filter((v) => v.field),
+        nameOutput: String(raw.nameOutput ?? '').trim() || 'field_name',
+        valueOutput: String(raw.valueOutput ?? '').trim() || 'field_value',
+        valueType,
+        skipNull: Boolean(raw.skipNull),
+      };
+    }
+    case 'rowsToColumns': {
+      const aggregate = String(raw.aggregate ?? '').toUpperCase();
+      return {
+        alias: raw.alias ?? 'a',
+        groupFields: ((raw.groupFields as unknown[] | undefined) || [])
+          .map((v) => String(v ?? '').trim())
+          .filter(Boolean),
+        pivotField: String(raw.pivotField ?? ''),
+        valueField: String(raw.valueField ?? ''),
+        aggregate: (['SUM', 'MAX', 'MIN', 'AVG', 'COUNT'].includes(aggregate) ? aggregate : 'SUM') as
+          | 'SUM'
+          | 'MAX'
+          | 'MIN'
+          | 'AVG'
+          | 'COUNT',
+        pivotValues: ((raw.pivotValues as Json[] | undefined) || []).map((p) => ({
+          value: p.value == null ? '' : String(p.value),
+          output: String(p.output ?? ''),
+        })),
+      };
+    }
     case 'groupBy':
       return {
         alias: raw.alias ?? 'a',

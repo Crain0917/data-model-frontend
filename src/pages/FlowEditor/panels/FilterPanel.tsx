@@ -3,6 +3,7 @@ import { Button, Checkbox, Input, InputNumber, Select, Space, Switch } from 'ant
 import { CheckOutlined, HolderOutlined, MinusOutlined, TableOutlined } from '@ant-design/icons';
 import type { FieldDef, FilterConfig } from '../../../types';
 import { findUpstream, outputFields } from '../../../utils/dagUtils';
+import { displayDorisType, typeTooltip } from '../../../utils/dorisType';
 import { NodeCommon, SectionTitle, WarningLine, useDragSort, type PanelProps } from './common';
 import ConditionEditor from './ConditionEditor';
 import SqlPreview from './SqlPreview';
@@ -137,7 +138,9 @@ export default function FilterPanel({
                 <div className="f-name" title={row.field}>
                   {row.field}
                 </div>
-                <div className="f-type">{row.type || '—'}</div>
+                <div className="f-type" title={typeTooltip(row.type, displayDorisType(row.type))}>
+                  {displayDorisType(row.type) || '—'}
+                </div>
               </div>
               <Input
                 size="small"

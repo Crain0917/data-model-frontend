@@ -1,7 +1,8 @@
-import { Button, Input, Select, Switch } from 'antd';
+import { Button, Input, Select } from 'antd';
 import { DeleteOutlined, PlusOutlined, TableOutlined } from '@ant-design/icons';
 import type { FieldDef, NullStrategy, ReplaceNullConfig, ReplaceNullRule } from '../../../types';
-import { findUpstream, isNumericType, outputFields } from '../../../utils/dagUtils';
+import { findUpstream, isNumericType, outputFields, sourceDialectOf } from '../../../utils/dagUtils';
+import { displayDorisType, typeTooltip } from '../../../utils/dorisType';
 import {
   DangerLine,
   NodeCommon,
@@ -21,11 +22,7 @@ const STRATEGIES: Array<{ value: NullStrategy; label: string; hint: string }> = 
   { value: 'MODE', label: '众数', hint: '并列取最小值' },
 ];
 
-const GRID = '132px 66px 100px 100px 104px 62px 30px';
-
-function isStringType(type?: string): boolean {
-  return /^(CHAR|VARCHAR|STRING|TEXT)/i.test(String(type || '').trim());
-}
+const GRID = '132px 90px 100px 100px 104px 30px';
 
 function normalize(cfg: Partial<ReplaceNullConfig>): ReplaceNullConfig {
   return {
@@ -36,14 +33,13 @@ function normalize(cfg: Partial<ReplaceNullConfig>): ReplaceNullConfig {
         strategy: (String(r.strategy || 'VALUE').toUpperCase() as NullStrategy) || 'VALUE',
         value: r.value == null ? '' : String(r.value),
         output: r.output == null ? '' : String(r.output),
-        treatEmptyAsNull: Boolean(r.treatEmptyAsNull),
       }))
       .filter((r) => r.field),
   };
 }
 
 function blankRule(field: string): ReplaceNullRule {
-  return { field, strategy: 'VALUE', value: '', output: '', treatEmptyAsNull: false };
+  return { field, strategy: 'VALUE', value: '', output: '' };
 }
 
 export default function ReplaceNullPanel({
@@ -55,20 +51,24 @@ export default function ReplaceNullPanel({
   onMeta,
   onPreviewSql,
   onPreviewData,
+  dataSources,
 }: PanelProps) {
   const cfg = normalize(node.data.config as Partial<ReplaceNullConfig>);
   const upstream = findUpstream(node.id, nodes, edges);
   const upFields: FieldDef[] = upstream ? outputFields(upstream, nodes, edges) : [];
   const rules = cfg.rules;
+  const dialect = sourceDialectOf(node.id, nodes, edges, dataSources);
 
   const patch = (p: Partial<ReplaceNullConfig>) => onConfig({ ...cfg, ...p });
   const updateRule = (index: number, p: Partial<ReplaceNullRule>) => {
     patch({ rules: rules.map((row, i) => (i === index ? { ...row, ...p } : row)) });
   };
 
-  const typeOf = (field: string) =>
-    upFields.find((f) => f.name === field)?.type ||
-    upFields.find((f) => f.name.toLowerCase() === field.toLowerCase())?.type;
+  const fieldOf = (field: string) =>
+    upFields.find((f) => f.name === field) ||
+    upFields.find((f) => f.name.toLowerCase() === field.toLowerCase());
+
+  const typeOf = (field: string) => fieldOf(field)?.type;
 
   const addRule = () => {
     const used = new Set(rules.map((r) => r.field.toLowerCase()));
@@ -81,11 +81,7 @@ export default function ReplaceNullPanel({
     const type = typeOf(field);
     const numeric = isNumericType(type);
     const row = rules[index];
-    updateRule(index, {
-      field,
-      strategy: numeric ? row.strategy : 'VALUE',
-      treatEmptyAsNull: isStringType(type) ? row.treatEmptyAsNull : false,
-    });
+    updateRule(index, { field, strategy: numeric ? row.strategy : 'VALUE' });
   };
 
   const duplicateFields = (() => {
@@ -140,18 +136,17 @@ export default function ReplaceNullPanel({
           替换规则
         </SectionTitle>
         <div className="form-hint" style={{ marginBottom: 6 }}>
-          按字段配置：NULL 视为一个值参与替换。输出名留空或等于源字段表示原地替换，填其他名字则保留原字段并在末尾追加新列。
+          只替换 NULL；NULL 即缺失值。输出名留空或等于源字段表示原地替换，填其他名字则保留原字段并在末尾追加新列。类型列为 Doris 归一化类型。
         </div>
 
         <div className="field-table" style={{ overflowX: 'auto' }}>
-          <div style={{ minWidth: 600 }}>
+          <div style={{ minWidth: 560 }}>
             <div className="field-row field-row--head" style={{ gridTemplateColumns: GRID }}>
               <span>字段</span>
               <span>类型</span>
               <span>策略</span>
               <span>替换值</span>
               <span>输出列名</span>
-              <span>空串→NULL</span>
               <span />
             </div>
             {rules.length === 0 ? (
@@ -161,6 +156,9 @@ export default function ReplaceNullPanel({
             ) : null}
             {rules.map((row, index) => {
               const type = typeOf(row.field);
+              const field = fieldOf(row.field);
+              const shownType = displayDorisType(type, dialect);
+              const rawType = field?.sourceType || field?.type;
               const numeric = isNumericType(type);
               const strategies = numeric ? STRATEGIES : STRATEGIES.filter((s) => s.value === 'VALUE');
               return (
@@ -178,8 +176,8 @@ export default function ReplaceNullPanel({
                     options={fieldOptions(upFields)}
                     onChange={(v) => changeField(index, v)}
                   />
-                  <span className="f-type" title={type || '未知'}>
-                    {type || '—'}
+                  <span className="f-type" title={typeTooltip(rawType, shownType)}>
+                    {shownType || '—'}
                   </span>
                   <Select
                     size="small"
@@ -201,14 +199,6 @@ export default function ReplaceNullPanel({
                     placeholder={row.field || '原地替换'}
                     onChange={(e) => updateRule(index, { output: e.target.value })}
                   />
-                  <div style={{ textAlign: 'center' }}>
-                    <Switch
-                      size="small"
-                      checked={row.treatEmptyAsNull}
-                      disabled={!isStringType(type)}
-                      onChange={(v) => updateRule(index, { treatEmptyAsNull: v })}
-                    />
-                  </div>
                   <Button
                     size="small"
                     type="text"
@@ -223,9 +213,8 @@ export default function ReplaceNullPanel({
         </div>
 
         <div className="form-hint" style={{ marginTop: 6, lineHeight: 1.7 }}>
-          统计值基于上游非空数据计算（聚合基准是替换前的数据，不受同节点其他规则影响）；空表时返回 NULL。
-          AVG / MEDIAN 输出类型提升为 DOUBLE；MAX / MIN / MODE 保持原字段类型。非数字字段只支持「自定义值」。
-          「空串→NULL」仅对字符串字段生效。
+          只替换 NULL；NULL 即缺失值。统计值由后端 CTE 预计算（一次扫描上游非空数据，聚合基准是替换前的数据），
+          空表统计值为 NULL。AVG / MEDIAN 输出 DOUBLE；MAX / MIN / MODE 保持字段归一化类型。非数字字段只支持「自定义值」。
         </div>
 
         {!rules.length ? <WarningLine>尚未配置任何替换规则。</WarningLine> : null}

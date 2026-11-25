@@ -54,7 +54,10 @@ export interface TableInfo {
 
 export interface ColumnInfo {
   name: string;
+  /** Doris 归一化类型（后端 /columns 返回）。 */
   type: string;
+  /** 源库原始类型，如 bigint unsigned，仅用于展示提示。 */
+  sourceType?: string;
 }
 
 export type FlowNodeKind =
@@ -67,6 +70,10 @@ export type FlowNodeKind =
   | 'sortRows'
   | 'splitFields'
   | 'splitFieldsToRows'
+  | 'valueMapper'
+  | 'uniqueRows'
+  | 'columnsToRows'
+  | 'rowsToColumns'
   | 'groupBy'
   | 'join'
   | 'union'
@@ -74,7 +81,10 @@ export type FlowNodeKind =
 
 export interface FieldDef {
   name: string;
+  /** Doris 归一化类型。 */
   type: string;
+  /** 源库原始类型（仅 Source 字段保留，用于 tooltip）。 */
+  sourceType?: string;
 }
 
 export interface SortSpec {
@@ -259,7 +269,7 @@ export interface FormulaConfig {
 
 export type NullStrategy = 'VALUE' | 'MAX' | 'MIN' | 'AVG' | 'MEDIAN' | 'MODE';
 
-/** 契约字段名冻结，见 需求-2026-11-23-新增算子 §1。 */
+/** 契约字段名冻结，见 需求-2026-11-24 §A3：只替换 NULL。 */
 export interface ReplaceNullRule {
   field: string;
   strategy: NullStrategy;
@@ -267,7 +277,6 @@ export interface ReplaceNullRule {
   value: string;
   /** 空或等于 field = 原地替换 */
   output: string;
-  treatEmptyAsNull: boolean;
 }
 
 export interface ReplaceNullConfig {
@@ -331,6 +340,86 @@ export interface SplitFieldsToRowsConfig {
   trim: boolean;
   dropEmpty: boolean;
   positionOutput: string;
+}
+
+export interface ValueMapping {
+  from: string;
+  to: string;
+}
+
+export type ValueUnmatched = 'KEEP' | 'VALUE' | 'NULL';
+
+/** 契约字段名冻结，见 需求-2026-11-24 §B。 */
+export interface ValueMapperRule {
+  field: string;
+  /** 空或等于 field = 原地替换 */
+  output: string;
+  mappings: ValueMapping[];
+  unmatched: ValueUnmatched;
+  /** unmatched=VALUE 时的字面量 */
+  unmatchedValue: string;
+}
+
+export interface ValueMapperConfig {
+  alias: string;
+  rules: ValueMapperRule[];
+}
+
+export type UniqueMode = 'SIMPLE' | 'RULE';
+export type DuplicateOutput = 'DISCARD' | 'TABLE';
+
+export interface UniqueDuplicateTarget {
+  dataSourceId: number | null;
+  tableName: string;
+  writeMode: SinkWriteMode;
+  autoCreate: boolean;
+}
+
+/** 契约字段名冻结，见 需求-2026-11-24 §C。 */
+export interface UniqueRowsConfig {
+  alias: string;
+  mode: UniqueMode;
+  keyFields: string[];
+  ignoreCase: boolean;
+  orderBy: SortSpec[];
+  duplicateOutput: DuplicateOutput;
+  duplicateTarget: UniqueDuplicateTarget;
+}
+
+export type ColumnsToRowsValueType = 'STRING' | 'DOUBLE' | 'BIGINT';
+
+export interface ColumnsToRowsValueField {
+  field: string;
+  /** 名称列取值，缺省用字段名 */
+  label: string;
+}
+
+/** 契约字段名冻结，见 需求-2026-11-24 §D。 */
+export interface ColumnsToRowsConfig {
+  alias: string;
+  keepFields: string[];
+  valueFields: ColumnsToRowsValueField[];
+  nameOutput: string;
+  valueOutput: string;
+  valueType: ColumnsToRowsValueType;
+  skipNull: boolean;
+}
+
+export type PivotAggregate = 'SUM' | 'MAX' | 'MIN' | 'AVG' | 'COUNT';
+
+export interface PivotValue {
+  value: string;
+  output: string;
+}
+
+/** 契约字段名冻结，见 需求-2026-11-24 §E。 */
+export interface RowsToColumnsConfig {
+  alias: string;
+  groupFields: string[];
+  pivotField: string;
+  valueField: string;
+  aggregate: PivotAggregate;
+  pivotValues: PivotValue[];
 }
 
 export interface GroupByConfig {
@@ -402,6 +491,10 @@ export type AnyNodeConfig =
   | SortRowsConfig
   | SplitFieldsConfig
   | SplitFieldsToRowsConfig
+  | ValueMapperConfig
+  | UniqueRowsConfig
+  | ColumnsToRowsConfig
+  | RowsToColumnsConfig
   | GroupByConfig
   | JoinConfig
   | UnionConfig

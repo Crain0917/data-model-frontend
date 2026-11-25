@@ -28,6 +28,7 @@ import type {
   SinkTargetType,
 } from '../../../types';
 import { findUpstream, outputFields } from '../../../utils/dagUtils';
+import { displayDorisType, typeTooltip } from '../../../utils/dorisType';
 import { NodeCommon, SectionTitle, type PanelProps } from './common';
 import SqlPreview from './SqlPreview';
 
@@ -651,7 +652,9 @@ export default function SinkPanel(props: PanelProps) {
                       status={errors[`mapping_${i}`] ? 'error' : undefined}
                       onChange={(e) => setMapping(i, e.target.value)}
                     />
-                    <span className="f-type">{m.type || '—'}</span>
+                    <span className="f-type" title={typeTooltip(m.type, displayDorisType(m.type))}>
+                      {displayDorisType(m.type) || '—'}
+                    </span>
                   </div>
                   {errors[`mapping_${i}`] ? (
                     <div

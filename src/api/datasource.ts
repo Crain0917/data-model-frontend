@@ -98,5 +98,6 @@ export async function listColumns(id: number, table: string): Promise<ColumnInfo
   return list.map((raw) => ({
     name: raw.name ?? raw.columnName ?? '',
     type: raw.type ?? '',
+    ...(raw.sourceType ? { sourceType: String(raw.sourceType) } : {}),
   }));
 }

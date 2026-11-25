@@ -37,6 +37,10 @@ const nodeTypes: NodeTypes = {
   sortRows: TransformNode,
   splitFields: TransformNode,
   splitFieldsToRows: TransformNode,
+  valueMapper: TransformNode,
+  uniqueRows: TransformNode,
+  columnsToRows: TransformNode,
+  rowsToColumns: TransformNode,
   groupBy: TransformNode,
   join: TransformNode,
   union: TransformNode,
@@ -249,7 +253,11 @@ function CanvasInner({ flowId, nodes, edges, fitSignal = 0 }: Props) {
             dataSourceName: payload.dataSourceName,
             dbName: payload.dbName,
             tableName: payload.tableName,
-            fields: columns.map((c) => ({ name: c.name, type: c.type })),
+            fields: columns.map((c) => ({
+              name: c.name,
+              type: c.type,
+              ...(c.sourceType ? { sourceType: c.sourceType } : {}),
+            })),
           },
           payload.tableName,
         );

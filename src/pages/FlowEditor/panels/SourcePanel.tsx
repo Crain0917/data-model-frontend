@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { App, Button, Input, Select, Spin, Tag } from 'antd';
+import { App, Button, Input, Select, Spin, Tag, Tooltip } from 'antd';
 import {
   DatabaseOutlined,
   HolderOutlined,
@@ -11,6 +11,7 @@ import {
 import type { SourceConfig } from '../../../types';
 import { listColumns, listTables } from '../../../api/datasource';
 import { NodeCommon, SectionTitle, useDragSort, type PanelProps } from './common';
+import { normalizeDorisType, typeTooltip } from '../../../utils/dorisType';
 import ConditionEditor from './ConditionEditor';
 import SqlPreview from './SqlPreview';
 
@@ -28,6 +29,7 @@ export default function SourcePanel({
   const { message } = App.useApp();
   const cfg = node.data.config as SourceConfig;
   const fields = cfg.fields || [];
+  const dialect = dataSources.find((d) => d.id === cfg.dataSourceId)?.type;
   const [tables, setTables] = useState<Array<{ tableName: string }>>([]);
   const [loadingTables, setLoadingTables] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -64,7 +66,11 @@ export default function SourcePanel({
   const loadFields = async (dataSourceId: number, tableName: string) => {
     try {
       const fields = await listColumns(dataSourceId, tableName);
-      return fields.map((f) => ({ name: f.name, type: f.type }));
+      return fields.map((f) => ({
+        name: f.name,
+        type: f.type,
+        ...(f.sourceType ? { sourceType: f.sourceType } : {}),
+      }));
     } catch (e) {
       message.error(`字段加载失败：${(e as Error).message}`);
       return [];
@@ -92,13 +98,21 @@ export default function SourcePanel({
       const removed = previous.filter((f) => !newNames.has(f.name)).length;
       const typeChanged = fetched.filter((f) => {
         const old = previous.find((o) => o.name === f.name);
-        return old && old.type !== f.type;
+        // 旧流程存的是源库原始类型，按归一化后比较，避免刷新时误报类型变更。
+        return old && normalizeDorisType(old.type, dialect) !== normalizeDorisType(f.type, dialect);
       }).length;
       // 保留用户拖动后的既有顺序，新字段追加到末尾，已删除字段移除。
       const fetchedByName = new Map(fetched.map((f) => [f.name, f]));
       const kept = previous
         .filter((f) => fetchedByName.has(f.name))
-        .map((f) => ({ name: f.name, type: fetchedByName.get(f.name)!.type }));
+        .map((f) => {
+          const next = fetchedByName.get(f.name)!;
+          return {
+            name: f.name,
+            type: next.type,
+            ...(next.sourceType ? { sourceType: next.sourceType } : {}),
+          };
+        });
       const keptNames = new Set(kept.map((f) => f.name));
       const appended = fetched.filter((f) => !keptNames.has(f.name));
       patch({ fields: [...kept, ...appended] });
@@ -188,34 +202,39 @@ export default function SourcePanel({
         {showFields ? (
           <>
             <div className="form-hint" style={{ margin: '8px 0 6px' }}>
-              拖动可调整字段顺序，同步按此顺序写入。
+              拖动可调整字段顺序，同步按此顺序写入。类型为 Doris 归一化类型，鼠标悬停可查看源库原始类型。
             </div>
             <div className="field-table" style={{ maxHeight: 260, overflow: 'auto' }}>
               <div className="field-row field-row--head" style={{ gridTemplateColumns: '22px 1fr 110px' }}>
                 <span />
                 <span>字段</span>
-                <span>类型</span>
+                <span>Doris 类型</span>
               </div>
-              {fields.map((f, index) => (
-                <div
-                  key={f.name}
-                  className={`field-row${drag.rowClass(index)}`}
-                  style={{ gridTemplateColumns: '22px 1fr 110px' }}
-                  {...drag.rowProps(index)}
-                >
-                  <span
-                    className="drag-handle"
-                    role="button"
-                    aria-label={`拖动调整字段 ${f.name} 的顺序`}
-                    title="按住拖动调整顺序"
-                    {...drag.handleProps(index)}
+              {fields.map((f, index) => {
+                const shownType = normalizeDorisType(f.type, dialect);
+                return (
+                  <div
+                    key={f.name}
+                    className={`field-row${drag.rowClass(index)}`}
+                    style={{ gridTemplateColumns: '22px 1fr 110px' }}
+                    {...drag.rowProps(index)}
                   >
-                    <HolderOutlined />
-                  </span>
-                  <span className="f-name">{f.name}</span>
-                  <Tag style={{ margin: 0, fontSize: 10 }}>{f.type}</Tag>
-                </div>
-              ))}
+                    <span
+                      className="drag-handle"
+                      role="button"
+                      aria-label={`拖动调整字段 ${f.name} 的顺序`}
+                      title="按住拖动调整顺序"
+                      {...drag.handleProps(index)}
+                    >
+                      <HolderOutlined />
+                    </span>
+                    <span className="f-name">{f.name}</span>
+                    <Tooltip title={typeTooltip(f.sourceType || f.type, shownType)}>
+                      <Tag style={{ margin: 0, fontSize: 10 }}>{shownType}</Tag>
+                    </Tooltip>
+                  </div>
+                );
+              })}
             </div>
           </>
         ) : null}

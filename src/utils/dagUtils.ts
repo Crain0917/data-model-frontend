@@ -1,9 +1,11 @@
 import type {
   CalculatorConfig,
   CalculatorRow,
+  ColumnsToRowsConfig,
   ConditionRow,
   ConvertConfig,
   ConvertField,
+  DataSource,
   FieldDef,
   FilterConfig,
   FlowEdge,
@@ -15,10 +17,13 @@ import type {
   JoinConfig,
   ReplaceNullConfig,
   ReplaceNullRule,
+  RowsToColumnsConfig,
   SortRowsConfig,
   SplitFieldsConfig,
   SplitFieldsToRowsConfig,
+  UniqueRowsConfig,
   UnionConfig,
+  ValueMapperConfig,
 } from '../types';
 import { DEFAULT_NODE_NAME, NODE_META } from './nodeMeta';
 
@@ -81,6 +86,42 @@ export function defaultConfig(kind: FlowNodeKind): Record<string, unknown> {
         trim: true,
         dropEmpty: false,
         positionOutput: '',
+      };
+    case 'valueMapper':
+      return { alias: 'a', rules: [] };
+    case 'uniqueRows':
+      return {
+        alias: 'a',
+        mode: 'SIMPLE',
+        keyFields: [],
+        ignoreCase: false,
+        orderBy: [],
+        duplicateOutput: 'DISCARD',
+        duplicateTarget: {
+          dataSourceId: null,
+          tableName: '',
+          writeMode: 'APPEND',
+          autoCreate: true,
+        },
+      };
+    case 'columnsToRows':
+      return {
+        alias: 'a',
+        keepFields: [],
+        valueFields: [],
+        nameOutput: 'field_name',
+        valueOutput: 'field_value',
+        valueType: 'STRING',
+        skipNull: false,
+      };
+    case 'rowsToColumns':
+      return {
+        alias: 'a',
+        groupFields: [],
+        pivotField: '',
+        valueField: '',
+        aggregate: 'SUM',
+        pivotValues: [],
       };
     case 'groupBy':
       return {
@@ -153,6 +194,26 @@ export function findUpstream(nodeId: string, nodes: FlowNode[], edges: FlowEdge[
   return nodes.find((n) => n.id === edge.source);
 }
 
+/** 沿单输入链路向上找 Source 的数据源方言；多输入节点（join/union）不猜测。 */
+export function sourceDialectOf(
+  nodeId: string,
+  nodes: FlowNode[],
+  edges: FlowEdge[],
+  dataSources: DataSource[],
+): string | undefined {
+  let current = findUpstream(nodeId, nodes, edges);
+  for (let depth = 0; current && depth < 12; depth += 1) {
+    const kind = current.data.kind;
+    if (kind === 'source') {
+      const dataSourceId = (current.data.config as { dataSourceId?: number | null }).dataSourceId;
+      return dataSources.find((d) => d.id === dataSourceId)?.type;
+    }
+    if (kind === 'join' || kind === 'union') return undefined;
+    current = findUpstream(current.id, nodes, edges);
+  }
+  return undefined;
+}
+
 /** 与后端 convertOutputType 保持一致，供面板与下游节点展示字段类型。 */
 function convertOutputType(row: ConvertField | undefined, fallback: string): string {
   const type = row?.targetType ? String(row.targetType).toUpperCase() : '';
@@ -215,9 +276,14 @@ export function isNumericType(type?: string | null): boolean {
   return NUMERIC_TYPE_RE.test(String(type).trim());
 }
 
-function ruleReplacesInPlace(rule: ReplaceNullRule): boolean {
+/** 与后端 isStringType 保持一致（CHAR/VARCHAR/STRING/TEXT）。 */
+export function isStringType(type?: string | null): boolean {
+  return /^(CHAR|VARCHAR|STRING|TEXT)/i.test(String(type || '').trim());
+}
+
+function ruleReplacesInPlace(rule: { field: string; output: string }): boolean {
   const out = String(rule.output || '').trim();
-  return !out || out.toLowerCase() === String(rule.field || '').trim().toLowerCase();
+  return !out || out === String(rule.field || '').trim();
 }
 
 function replaceNullOutputType(rule: ReplaceNullRule, sourceType: string): string {
@@ -351,6 +417,72 @@ export function outputFields(node: FlowNode, nodes: FlowNode[], edges: FlowEdge[
       const position = String(s.positionOutput || '').trim();
       if (position) result = [...result, { name: position, type: 'BIGINT' }];
       return result;
+    }
+    case 'valueMapper': {
+      const v = cfg as ValueMapperConfig;
+      const upstream = findUpstream(node.id, nodes, edges);
+      const upFields = upstream ? outputFields(upstream, nodes, edges, depth + 1) : [];
+      const rules = (v.rules || []).filter((row) => String(row.field || '').trim());
+      const findRule = (name: string) =>
+        rules.find((row) => row.field === name) ||
+        rules.find((row) => row.field.toLowerCase() === name.toLowerCase());
+      const inPlace = upFields.map((field) => {
+        const rule = findRule(field.name);
+        if (!rule || !ruleReplacesInPlace(rule)) return field;
+        return { name: field.name, type: field.type };
+      });
+      const added = rules
+        .filter((rule) => !ruleReplacesInPlace(rule))
+        .map((rule) => {
+          const src = upFields.find(
+            (f) => f.name === rule.field || f.name.toLowerCase() === rule.field.toLowerCase(),
+          );
+          return { name: String(rule.output).trim(), type: src?.type || 'STRING' };
+        });
+      return [...inPlace, ...added];
+    }
+    case 'uniqueRows': {
+      const upstream = findUpstream(node.id, nodes, edges);
+      const upFields = upstream ? outputFields(upstream, nodes, edges, depth + 1) : [];
+      return upFields.filter((f) => f.name.toLowerCase() !== '__dm_rowid');
+    }
+    case 'columnsToRows': {
+      const c = cfg as ColumnsToRowsConfig;
+      const upstream = findUpstream(node.id, nodes, edges);
+      const upFields = upstream ? outputFields(upstream, nodes, edges, depth + 1) : [];
+      const keep = upFields.filter((f) =>
+        (c.keepFields || []).some((k) => String(k).toLowerCase() === f.name.toLowerCase()),
+      );
+      const rawType = String(c.valueType || 'STRING').toUpperCase();
+      const valueType = rawType === 'DOUBLE' || rawType === 'BIGINT' ? rawType : 'STRING';
+      const nameOut = String(c.nameOutput || '').trim() || 'field_name';
+      const valueOut = String(c.valueOutput || '').trim() || 'field_value';
+      return [...keep, { name: nameOut, type: 'STRING' }, { name: valueOut, type: valueType }];
+    }
+    case 'rowsToColumns': {
+      const r = cfg as RowsToColumnsConfig;
+      const upstream = findUpstream(node.id, nodes, edges);
+      const upFields = upstream ? outputFields(upstream, nodes, edges, depth + 1) : [];
+      const groups = (r.groupFields || [])
+        .map((g) => upFields.find((f) => f.name.toLowerCase() === String(g).toLowerCase()))
+        .filter((f): f is FieldDef => Boolean(f));
+      const sourceType =
+        upFields.find(
+          (f) => r.valueField && f.name.toLowerCase() === String(r.valueField).toLowerCase(),
+        )?.type || 'STRING';
+      const aggregate = String(r.aggregate || 'SUM').toUpperCase();
+      const pivotType =
+        aggregate === 'COUNT'
+          ? 'BIGINT'
+          : aggregate === 'AVG'
+            ? 'DOUBLE'
+            : aggregate === 'SUM'
+              ? isNumericType(sourceType) ? sourceType : 'DOUBLE'
+              : sourceType;
+      const pivots = (r.pivotValues || [])
+        .filter((p) => String(p.output || '').trim())
+        .map((p) => ({ name: String(p.output).trim(), type: pivotType }));
+      return [...groups, ...pivots];
     }
     case 'groupBy': {
       const g = cfg as GroupByConfig;

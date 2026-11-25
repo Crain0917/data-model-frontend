@@ -16,6 +16,10 @@ import ReplaceNullPanel from './panels/ReplaceNullPanel';
 import SortRowsPanel from './panels/SortRowsPanel';
 import SplitFieldsPanel from './panels/SplitFieldsPanel';
 import SplitToRowsPanel from './panels/SplitToRowsPanel';
+import ValueMapperPanel from './panels/ValueMapperPanel';
+import UniqueRowsPanel from './panels/UniqueRowsPanel';
+import ColumnsToRowsPanel from './panels/ColumnsToRowsPanel';
+import RowsToColumnsPanel from './panels/RowsToColumnsPanel';
 import GroupByPanel from './panels/GroupByPanel';
 import JoinPanel from './panels/JoinPanel';
 import UnionPanel from './panels/UnionPanel';
@@ -150,6 +154,14 @@ export default function ConfigDrawer({
         return <SplitFieldsPanel {...panelProps} />;
       case 'splitFieldsToRows':
         return <SplitToRowsPanel {...panelProps} />;
+      case 'valueMapper':
+        return <ValueMapperPanel {...panelProps} />;
+      case 'uniqueRows':
+        return <UniqueRowsPanel {...panelProps} />;
+      case 'columnsToRows':
+        return <ColumnsToRowsPanel {...panelProps} />;
+      case 'rowsToColumns':
+        return <RowsToColumnsPanel {...panelProps} />;
       case 'groupBy':
         return <GroupByPanel {...panelProps} />;
       case 'join':

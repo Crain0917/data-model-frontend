@@ -9,6 +9,7 @@ import {
 } from '@ant-design/icons';
 import type { FieldDef, JoinConfig } from '../../../types';
 import { outputFields } from '../../../utils/dagUtils';
+import { displayDorisType, typeTooltip } from '../../../utils/dorisType';
 import { DangerLine, NodeCommon, SectionTitle, WarningLine, fieldOptions, type PanelProps } from './common';
 import SqlPreview from './SqlPreview';
 
@@ -240,7 +241,13 @@ export default function JoinPanel({
               </span>
               <div className="f-name" title={proj.field}>
                 {proj.field}
-                <span className="f-type" style={{ marginLeft: 4 }}>{proj.type}</span>
+                <span
+                  className="f-type"
+                  style={{ marginLeft: 4 }}
+                  title={typeTooltip(proj.type, displayDorisType(proj.type))}
+                >
+                  {displayDorisType(proj.type)}
+                </span>
               </div>
               <Input
                 size="small"

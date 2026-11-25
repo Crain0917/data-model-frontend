@@ -7,6 +7,7 @@ import {
 } from '@ant-design/icons';
 import type { FieldDef, UnionConfig } from '../../../types';
 import { outputFields } from '../../../utils/dagUtils';
+import { displayDorisType, typeTooltip } from '../../../utils/dorisType';
 import { DangerLine, NodeCommon, SectionTitle, WarningLine, fieldOptions, type PanelProps } from './common';
 import SqlPreview from './SqlPreview';
 
@@ -162,7 +163,9 @@ export default function UnionPanel({
               <div key={`${t.name}-${i}`} className="field-row" style={{ gridTemplateColumns: '36px 1fr 70px' }}>
                 <span className="form-hint">{i + 1}</span>
                 <span className="f-name">{t.name}</span>
-                <span className="f-type">{t.type || '—'}</span>
+                <span className="f-type" title={typeTooltip(t.type, displayDorisType(t.type))}>
+                  {displayDorisType(t.type) || '—'}
+                </span>
               </div>
             ))}
           </div>

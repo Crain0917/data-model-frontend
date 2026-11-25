@@ -8,7 +8,8 @@ import type {
   ConvertTrim,
   FieldDef,
 } from '../../../types';
-import { findUpstream, outputFields } from '../../../utils/dagUtils';
+import { findUpstream, outputFields, sourceDialectOf } from '../../../utils/dagUtils';
+import { displayDorisType, typeTooltip } from '../../../utils/dorisType';
 import { DangerLine, NodeCommon, SectionTitle, WarningLine, type PanelProps } from './common';
 import SqlPreview from './SqlPreview';
 
@@ -83,10 +84,12 @@ export default function ConvertPanel({
   onMeta,
   onPreviewSql,
   onPreviewData,
+  dataSources,
 }: PanelProps) {
   const cfg = normalize(node.data.config as Partial<ConvertConfig>);
   const upstream = findUpstream(node.id, nodes, edges);
   const upFields: FieldDef[] = upstream ? outputFields(upstream, nodes, edges) : [];
+  const dialect = sourceDialectOf(node.id, nodes, edges, dataSources);
   const rows = cfg.conversions;
   const upKey = upFields.map((f) => f.name).join('|');
 
@@ -110,10 +113,11 @@ export default function ConvertPanel({
     patch({ conversions: merged });
   };
 
-  const sourceType = (field: string) =>
-    upFields.find((f) => f.name === field)?.type ||
-    upFields.find((f) => f.name.toLowerCase() === field.toLowerCase())?.type ||
-    '—';
+  const sourceField = (field: string) =>
+    upFields.find((f) => f.name === field) ||
+    upFields.find((f) => f.name.toLowerCase() === field.toLowerCase());
+
+  const sourceType = (field: string) => sourceField(field)?.type || '';
 
   const changeTargetType = (index: number, value: ConvertTargetType | undefined) => {
     const row = rows[index];
@@ -228,8 +232,14 @@ export default function ConvertPanel({
                   <span className="f-name" title={row.field}>
                     {row.field}
                   </span>
-                  <span className="f-type" title={sourceType(row.field)}>
-                    {sourceType(row.field)}
+                  <span
+                    className="f-type"
+                    title={typeTooltip(
+                      sourceField(row.field)?.sourceType || sourceType(row.field),
+                      displayDorisType(sourceType(row.field), dialect),
+                    )}
+                  >
+                    {displayDorisType(sourceType(row.field), dialect) || '—'}
                   </span>
                   <Select
                     size="small"
