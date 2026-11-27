@@ -30,8 +30,8 @@ function normalize(cfg: Partial<ColumnsToRowsConfig>): ColumnsToRowsConfig {
     alias: cfg.alias || 'a',
     keepFields: Array.isArray(cfg.keepFields) ? cfg.keepFields.filter(Boolean) : [],
     valueFields: (cfg.valueFields || []).filter((v) => String(v.field || '').trim()),
-    nameOutput: String(cfg.nameOutput || '').trim() || 'field_name',
-    valueOutput: String(cfg.valueOutput || '').trim() || 'field_value',
+    nameOutput: String(cfg.nameOutput ?? '').trim(),
+    valueOutput: String(cfg.valueOutput ?? '').trim(),
     valueType: (raw === 'DOUBLE' || raw === 'BIGINT' ? raw : 'STRING') as ColumnsToRowsValueType,
     skipNull: Boolean(cfg.skipNull),
   };
@@ -221,12 +221,15 @@ export default function ColumnsToRowsPanel({
       </div>
 
       {!valueFields.length ? <WarningLine>至少需要 1 个值字段。</WarningLine> : null}
+      {!cfg.nameOutput.trim() ? <DangerLine>名称列名不能为空。</DangerLine> : null}
+      {!cfg.valueOutput.trim() ? <DangerLine>值列名不能为空。</DangerLine> : null}
       {cfg.valueType !== 'STRING' && nonNumeric.length ? (
         <DangerLine>
           值类型为 {cfg.valueType} 时值字段必须都是数字类型：{nonNumeric.map((v) => v.field).join('、')}
         </DangerLine>
       ) : null}
-      {cfg.nameOutput.trim().toLowerCase() === cfg.valueOutput.trim().toLowerCase() ? (
+      {cfg.nameOutput.trim().toLowerCase() === cfg.valueOutput.trim().toLowerCase() &&
+      (cfg.nameOutput.trim() || cfg.valueOutput.trim()) ? (
         <DangerLine>名称列与值列不能同名。</DangerLine>
       ) : null}
       {cfg.keepFields.some(

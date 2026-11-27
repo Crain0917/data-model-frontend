@@ -41,6 +41,8 @@ const nodeTypes: NodeTypes = {
   uniqueRows: TransformNode,
   columnsToRows: TransformNode,
   rowsToColumns: TransformNode,
+  replaceInString: TransformNode,
+  llm: TransformNode,
   groupBy: TransformNode,
   join: TransformNode,
   union: TransformNode,
@@ -87,7 +89,7 @@ function CanvasInner({ flowId, nodes, edges, fitSignal = 0 }: Props) {
   const connect = useFlowStore((s) => s.connect);
   const addNode = useFlowStore((s) => s.addNode);
   const removeNodes = useFlowStore((s) => s.removeNodes);
-  const setSelected = useFlowStore((s) => s.setSelected);
+  const requestSelect = useFlowStore((s) => s.requestSelect);
   const viewport = useFlowStore((s) => s.viewport);
   const setViewport = useFlowStore((s) => s.setViewport);
   const [dragOver, setDragOver] = useState(false);
@@ -230,6 +232,7 @@ function CanvasInner({ flowId, nodes, edges, fitSignal = 0 }: Props) {
     const position = screenToFlowPosition({ x: event.clientX, y: event.clientY });
     const kind = event.dataTransfer.getData('application/x-flow-node') as FlowNodeKind;
     const tablePayload = event.dataTransfer.getData('application/x-flow-table');
+    if (!kind && !tablePayload) return;
     if (kind) {
       const node = createNode(kind, { x: position.x - 60, y: position.y - 60 });
       addNode(node);
@@ -320,8 +323,8 @@ function CanvasInner({ flowId, nodes, edges, fitSignal = 0 }: Props) {
           );
           if (!check.ok && check.reason) message.error(check.reason);
         }}
-        onNodeClick={(_e, node) => setSelected(node.id)}
-        onPaneClick={() => setSelected(null)}
+        onNodeClick={(_e, node) => requestSelect(node.id)}
+        onPaneClick={() => requestSelect(null)}
         onMoveEnd={(_e, vp) => setViewport(vp)}
         defaultViewport={viewport}
         fitView
@@ -374,7 +377,7 @@ function CanvasInner({ flowId, nodes, edges, fitSignal = 0 }: Props) {
           <div className="canvas-empty-card">
             <h3>从左侧拖入数据表开始编排</h3>
             <p style={{ fontSize: 12.5, color: 'var(--text-secondary)', margin: 0 }}>
-              画布会自动保存，刷新后节点位置与配置都会还原。
+              画布改动自动保存；节点配置修改后需在面板内手动保存。
             </p>
             <ol className="steps">
               <li>

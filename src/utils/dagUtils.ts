@@ -15,6 +15,8 @@ import type {
   FormulaRow,
   GroupByConfig,
   JoinConfig,
+  LlmConfig,
+  ReplaceInStringConfig,
   ReplaceNullConfig,
   ReplaceNullRule,
   RowsToColumnsConfig,
@@ -26,6 +28,21 @@ import type {
   ValueMapperConfig,
 } from '../types';
 import { DEFAULT_NODE_NAME, NODE_META } from './nodeMeta';
+
+/** 需求-2026-11-26 §5.7 默认 Prompt，LLM 面板「恢复默认模板」共用。 */
+export const DEFAULT_LLM_PROMPT = [
+  '任务：将下面的订单状态文本标准化为指定枚举值。',
+  '可选枚举值：${enum_list}',
+  '规则：',
+  '1. 只能返回枚举列表中的一个值，禁止解释、禁止多余文字、禁止换行。',
+  '2. 无法判断、内容为空时，返回「${fallback}」。',
+  '3. 不要自行创造新的枚举值。',
+  '',
+  '待处理数据（JSON 数组，每项含 id 与字段）：',
+  '${input_text}',
+  '',
+  '请只输出 JSON 数组，格式为 [{"id":"记录id","value":"枚举值"}]，禁止代码块标记与解释。',
+].join('\n');
 
 export function newNodeId(kind: FlowNodeKind): string {
   return `node_${kind}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
@@ -122,6 +139,30 @@ export function defaultConfig(kind: FlowNodeKind): Record<string, unknown> {
         valueField: '',
         aggregate: 'SUM',
         pivotValues: [],
+      };
+    case 'replaceInString':
+      return {
+        alias: 'a',
+        field: '',
+        output: '',
+        search: '',
+        replacement: '',
+        useRegex: false,
+      };
+    case 'llm':
+      return {
+        alias: 'a',
+        inputFields: [],
+        inputVariables: [],
+        outputField: '',
+        enumValues: [],
+        batchRows: 20,
+        endpoint: 'https://api.openai.com/v1',
+        model: 'gpt-4o-mini',
+        promptTemplate: DEFAULT_LLM_PROMPT,
+        unknownValue: '未知',
+        timeoutSeconds: 60,
+        maxRetries: 2,
       };
     case 'groupBy':
       return {
@@ -455,9 +496,35 @@ export function outputFields(node: FlowNode, nodes: FlowNode[], edges: FlowEdge[
       );
       const rawType = String(c.valueType || 'STRING').toUpperCase();
       const valueType = rawType === 'DOUBLE' || rawType === 'BIGINT' ? rawType : 'STRING';
-      const nameOut = String(c.nameOutput || '').trim() || 'field_name';
-      const valueOut = String(c.valueOutput || '').trim() || 'field_value';
-      return [...keep, { name: nameOut, type: 'STRING' }, { name: valueOut, type: valueType }];
+      // 不清空自动回填：名称为空时表示尚待用户填写（校验会阻断保存/预览）。
+      const nameOut = String(c.nameOutput ?? '').trim();
+      const valueOut = String(c.valueOutput ?? '').trim();
+      const cols: FieldDef[] = [...keep];
+      if (nameOut) cols.push({ name: nameOut, type: 'STRING' });
+      if (valueOut) cols.push({ name: valueOut, type: valueType });
+      return cols;
+    }
+    case 'replaceInString': {
+      const r = cfg as ReplaceInStringConfig;
+      const upstream = findUpstream(node.id, nodes, edges);
+      const upFields = upstream ? outputFields(upstream, nodes, edges, depth + 1) : [];
+      const out = String(r.output || '').trim();
+      const inPlace = !out || out.toLowerCase() === String(r.field || '').trim().toLowerCase();
+      if (inPlace) {
+        return upFields.map((f) =>
+          f.name.toLowerCase() === String(r.field || '').trim().toLowerCase()
+            ? { name: f.name, type: 'STRING' }
+            : f,
+        );
+      }
+      return [...upFields, { name: out, type: 'STRING' }];
+    }
+    case 'llm': {
+      const l = cfg as LlmConfig;
+      const upstream = findUpstream(node.id, nodes, edges);
+      const upFields = upstream ? outputFields(upstream, nodes, edges, depth + 1) : [];
+      const out = String(l.outputField || '').trim();
+      return out ? [...upFields, { name: out, type: 'STRING' }] : upFields;
     }
     case 'rowsToColumns': {
       const r = cfg as RowsToColumnsConfig;

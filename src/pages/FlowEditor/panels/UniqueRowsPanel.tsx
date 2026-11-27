@@ -27,7 +27,11 @@ function normalize(cfg: Partial<UniqueRowsConfig>): UniqueRowsConfig {
     mode: String(cfg.mode || 'SIMPLE').toUpperCase() === 'RULE' ? 'RULE' : 'SIMPLE',
     keyFields: Array.isArray(cfg.keyFields) ? cfg.keyFields.filter(Boolean) : [],
     ignoreCase: Boolean(cfg.ignoreCase),
-    orderBy: (cfg.orderBy || []).filter((k) => String(k.field || '').trim()),
+    // 保留尚未选字段的草稿行，否则「添加排序」会被下一次 normalize 立即抹掉。
+    orderBy: (cfg.orderBy || []).map((k) => ({
+      field: String(k.field || ''),
+      direction: String(k.direction || 'DESC').toUpperCase() === 'ASC' ? 'ASC' : 'DESC',
+    })),
     duplicateOutput: String(cfg.duplicateOutput || 'DISCARD').toUpperCase() === 'TABLE' ? 'TABLE' : 'DISCARD',
     duplicateTarget: {
       dataSourceId: target.dataSourceId ?? null,
@@ -314,6 +318,11 @@ export default function UniqueRowsPanel({
       {!cfg.keyFields.length ? <WarningLine>至少需要 1 个关键字段。</WarningLine> : null}
       {cfg.mode === 'RULE' && !cfg.orderBy.length ? (
         <WarningLine>按规则去重至少需要 1 个排序字段。</WarningLine>
+      ) : null}
+      {cfg.mode === 'RULE' && cfg.orderBy.some((k) => !String(k.field || '').trim()) ? (
+        <DangerLine>
+          有 {cfg.orderBy.filter((k) => !String(k.field || '').trim()).length} 个排序字段未选择，请选择字段后再保存/预览。
+        </DangerLine>
       ) : null}
       {cfg.ignoreCase && !mixedCaseKeys.length ? (
         <WarningLine>当前关键字段中没有字符串字段，「忽略大小写」不会生效。</WarningLine>

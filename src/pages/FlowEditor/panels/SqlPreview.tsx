@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Button, Tooltip } from 'antd';
 import { CloudServerOutlined, FormOutlined, LoadingOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { FlowEdge, FlowNode, SinkConfig, SinkTableModel } from '../../../types';
@@ -15,6 +15,10 @@ interface Props {
   onPreviewClick?: () => Promise<string | null> | string | null;
 }
 
+/**
+ * SQL 预览按需请求：抽屉打开一次、控件失焦且配置变化、手动刷新、点击「预览 SQL」。
+ * 输入过程中不请求，避免每敲一个字都打后端。
+ */
 export default function SqlPreview({
   node,
   nodes,
@@ -28,34 +32,83 @@ export default function SqlPreview({
   const [remote, setRemote] = useState<NodeSqlPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [reloadToken, setReloadToken] = useState(0);
-  const aliveRef = useRef(true);
+  const [stale, setStale] = useState(false);
 
+  const dagRef = useRef(dagJson);
+  const keyRef = useRef(configKey);
+  const requestedKeyRef = useRef<string | null>(null);
+  const loadingRef = useRef(false);
+  const aliveRef = useRef(true);
+  const seqRef = useRef(0);
+  const onPreviewSqlRef = useRef(onPreviewSql);
+  dagRef.current = dagJson;
+  keyRef.current = configKey;
+  onPreviewSqlRef.current = onPreviewSql;
+
+  const request = useCallback(
+    async (openAfter: boolean) => {
+      const seq = ++seqRef.current;
+      const key = keyRef.current;
+      requestedKeyRef.current = key;
+      loadingRef.current = true;
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await previewNodeSql(flowId, node.id, JSON.parse(dagRef.current));
+        if (!aliveRef.current || seq !== seqRef.current) return;
+        setRemote(res);
+        setStale(keyRef.current !== key);
+        if (openAfter) onPreviewSqlRef.current(res.displaySql || res.sql || '');
+      } catch (e) {
+        if (!aliveRef.current || seq !== seqRef.current) return;
+        setRemote(null);
+        setError((e as Error).message || 'SQL 预览失败');
+      } finally {
+        if (aliveRef.current && seq === seqRef.current) {
+          loadingRef.current = false;
+          setLoading(false);
+        }
+      }
+    },
+    [flowId, node.id],
+  );
+
+  // 抽屉/节点面板打开时只请求一次；之后的改动等待失焦。
   useEffect(() => {
     aliveRef.current = true;
-    setLoading(true);
-    setError(null);
-    const timer = window.setTimeout(() => {
-      previewNodeSql(flowId, node.id, JSON.parse(dagJson))
-        .then((res) => {
-          if (!aliveRef.current) return;
-          setRemote(res);
-          setError(null);
-        })
-        .catch((e) => {
-          if (!aliveRef.current) return;
-          setRemote(null);
-          setError((e as Error).message || 'SQL 预览失败');
-        })
-        .finally(() => {
-          if (aliveRef.current) setLoading(false);
-        });
-    }, 300);
+    requestedKeyRef.current = null;
+    setStale(false);
+    void request(false);
     return () => {
       aliveRef.current = false;
-      window.clearTimeout(timer);
+      seqRef.current += 1;
     };
-  }, [flowId, node.id, configKey, dagJson, reloadToken]);
+  }, [request]);
+
+  // 表单控件失焦且配置与上次请求不同，才补一次请求。
+  useEffect(() => {
+    const onFocusOut = (e: FocusEvent) => {
+      // 只把「离开配置表单控件」当作编辑完成；从页面其他位置点入输入框不算。
+      const target = e.target as HTMLElement | null;
+      const tag = (target?.tagName || '').toLowerCase();
+      const editable = tag === 'input' || tag === 'textarea' || Boolean(target?.isContentEditable);
+      if (!editable || !target?.closest('.config-drawer, .config-modal')) return;
+      window.setTimeout(() => {
+        if (!aliveRef.current || loadingRef.current) return;
+        if (keyRef.current !== requestedKeyRef.current) {
+          setStale(true);
+          void request(false);
+        }
+      }, 180);
+    };
+    document.addEventListener('focusout', onFocusOut);
+    return () => document.removeEventListener('focusout', onFocusOut);
+  }, [request]);
+
+  useEffect(() => {
+    if (requestedKeyRef.current === null) return;
+    setStale(keyRef.current !== requestedKeyRef.current);
+  }, [configKey]);
 
   const sinkCfg = node.data.kind === 'sink' ? (node.data.config as Partial<SinkConfig>) : null;
   const sinkModel = (() => {
@@ -89,21 +142,30 @@ export default function SqlPreview({
         <Tooltip title={error ? '后端生成失败，不回落本地 SQL' : '由后端 SQL Builder 生成，与执行 SQL 同源'}>
           {statusChip}
         </Tooltip>
+        {stale && !loading ? (
+          <span style={{ color: 'var(--warning, #d97706)' }}>配置已修改，失焦后刷新</span>
+        ) : null}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
           <Tooltip title="重新获取预览">
-            <Button size="small" type="text" icon={<ReloadOutlined />} onClick={() => setReloadToken((v) => v + 1)} />
+            <Button
+              size="small"
+              type="text"
+              icon={<ReloadOutlined />}
+              loading={loading}
+              onClick={() => void request(false)}
+            />
           </Tooltip>
           <Button
             size="small"
             icon={<FormOutlined />}
-            disabled={onPreviewClick ? false : !displaySql || loading || Boolean(error)}
+            loading={loading}
             onClick={async () => {
               if (onPreviewClick) {
                 const sql = await onPreviewClick();
                 if (sql) onPreviewSql(sql);
                 return;
               }
-              onPreviewSql(displaySql);
+              await request(true);
             }}
           >
             预览 SQL
@@ -119,7 +181,7 @@ export default function SqlPreview({
           message="SQL 预览失败"
           description={`${error}（未使用本地生成的 SQL 兜底）`}
           action={
-            <Button size="small" onClick={() => setReloadToken((v) => v + 1)}>
+            <Button size="small" onClick={() => void request(false)}>
               重试
             </Button>
           }

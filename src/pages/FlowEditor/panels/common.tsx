@@ -30,7 +30,7 @@ export interface PanelProps {
 export function SectionTitle({ children, extra }: { children: ReactNode; extra?: ReactNode }) {
   return (
     <div className="form-section-title">
-      <span>{children}</span>
+      <span className="section-title-text">{children}</span>
       {extra}
     </div>
   );

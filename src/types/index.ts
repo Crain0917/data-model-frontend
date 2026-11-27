@@ -74,6 +74,8 @@ export type FlowNodeKind =
   | 'uniqueRows'
   | 'columnsToRows'
   | 'rowsToColumns'
+  | 'replaceInString'
+  | 'llm'
   | 'groupBy'
   | 'join'
   | 'union'
@@ -422,6 +424,40 @@ export interface RowsToColumnsConfig {
   pivotValues: PivotValue[];
 }
 
+/** 契约字段名冻结，见 需求-2026-11-25 三、替换字符串。 */
+export interface ReplaceInStringConfig {
+  alias: string;
+  field: string;
+  /** 留空或与 field 相同 = 原地替换 */
+  output: string;
+  search: string;
+  replacement: string;
+  useRegex: boolean;
+}
+
+/** 输入字段 → Prompt 变量名映射，见 需求-2026-11-26 §5.4。 */
+export interface LlmInputVariable {
+  field: string;
+  variable: string;
+}
+
+/** 契约字段名冻结，见 需求-2026-11-25 4.1 / 2026-11-26 §5；API Key 不进入 dagJson。 */
+export interface LlmConfig {
+  alias: string;
+  inputFields: string[];
+  /** 旧配置可缺省：此时变量名默认取字段名。 */
+  inputVariables: LlmInputVariable[];
+  outputField: string;
+  enumValues: string[];
+  batchRows: number;
+  endpoint: string;
+  model: string;
+  promptTemplate: string;
+  unknownValue: string;
+  timeoutSeconds: number;
+  maxRetries: number;
+}
+
 export interface GroupByConfig {
   alias: string;
   globalAgg: boolean;
@@ -495,6 +531,8 @@ export type AnyNodeConfig =
   | UniqueRowsConfig
   | ColumnsToRowsConfig
   | RowsToColumnsConfig
+  | ReplaceInStringConfig
+  | LlmConfig
   | GroupByConfig
   | JoinConfig
   | UnionConfig
@@ -599,11 +637,13 @@ export interface NodeDataPreview {
   columns: ColumnInfo[];
   rows: unknown[][];
   truncated: boolean;
-  source: 'SOURCE_DB' | 'DORIS' | 'MOCK' | string;
+  source: 'SOURCE_DB' | 'DORIS' | 'MOCK' | 'LLM' | string;
   sql?: string;
   displaySql?: string;
   params?: unknown[];
   sink?: SinkPreviewMeta;
+  /** 大模型节点预览附加信息：真实调用模型的次数与分批数。 */
+  llm?: { calls?: number; batches?: number } | null;
 }
 
 export interface NodeLogs {

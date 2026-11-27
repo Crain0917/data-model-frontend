@@ -30,7 +30,7 @@ import {
 } from '../../api/flow';
 import { createNode } from '../../utils/dagUtils';
 import { dagWarnings } from '../../utils/validation';
-import { useFlowStore } from './store';
+import { dirtyDraftIds, useFlowStore } from './store';
 import DataSourceColumn from './DataSourceColumn';
 import TableColumn from './TableColumn';
 import Canvas from './Canvas';
@@ -95,11 +95,15 @@ export default function FlowEditorPage() {
   const saveError = useFlowStore((s) => s.saveError);
   const lastSavedAt = useFlowStore((s) => s.lastSavedAt);
   const changeSeq = useFlowStore((s) => s.changeSeq);
+  const drafts = useFlowStore((s) => s.drafts);
+  const baselines = useFlowStore((s) => s.baselines);
   const load = useFlowStore((s) => s.load);
   const save = useFlowStore((s) => s.save);
   const addNode = useFlowStore((s) => s.addNode);
   const setRunStatus = useFlowStore((s) => s.setRunStatus);
   const setFlowMeta = useFlowStore((s) => s.setFlowMeta);
+  const whenDraftsResolved = useFlowStore((s) => s.whenDraftsResolved);
+  const dirtyDraftCount = dirtyDraftIds(nodes, drafts, baselines).length;
 
   const [dataSources, setDataSources] = useState<DataSource[]>([]);
   const [dsLoading, setDsLoading] = useState(true);
@@ -205,7 +209,8 @@ export default function FlowEditorPage() {
 
   useEffect(() => {
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (useFlowStore.getState().changeSeq > 0) {
+      const s = useFlowStore.getState();
+      if (s.changeSeq > 0 || dirtyDraftIds(s.nodes, s.drafts, s.baselines).length > 0) {
         e.preventDefault();
         e.returnValue = '';
       }
@@ -218,7 +223,26 @@ export default function FlowEditorPage() {
     };
   }, []);
 
-  const warnings = useMemo(() => dagWarnings(nodes, edges), [nodes, edges]);
+  // 画布与面板展示「已保存配置 + 未保存草稿」，避免编辑中看不到变化；落库仍只用 store 的 nodes。
+  const displayNodes = useMemo(
+    () =>
+      nodes.map((n) => {
+        const draft = drafts[n.id];
+        if (!draft) return n;
+        return {
+          ...n,
+          data: {
+            ...n.data,
+            config: draft.config,
+            label: draft.label,
+            color: draft.color,
+          },
+        };
+      }),
+    [nodes, drafts],
+  );
+
+  const warnings = useMemo(() => dagWarnings(displayNodes, edges), [displayNodes, edges]);
 
   const selectedDs = dataSources.find((d) => d.id === dsId) || null;
 
@@ -322,9 +346,37 @@ export default function FlowEditorPage() {
     [applyRunStatuses, message, setFlowMeta],
   );
 
+  /** 执行当前节点：reuseUpstream=false，后端先跑上游链再跑本节点。 */
+  const runSingleNode = useCallback(
+    async (nodeId: string): Promise<{ ok: boolean; message?: string }> => {
+      if (!flow) return { ok: false, message: '任务尚未加载完成，请稍后重试' };
+      if (running) return { ok: false, message: '当前已有任务在执行中，请稍后再试' };
+      if (!(await whenDraftsResolved())) return { ok: false, message: '已取消执行' };
+      setRunning(true);
+      setMiddleRunning(false);
+      stopPolling();
+      const token = pollToken.current;
+      message.loading({ content: '节点执行提交中…', key: 'flow-run', duration: 0 });
+      try {
+        const runId = await startNodeRun(flow.id, nodeId, false);
+        setRunStatus(nodeId, 'RUNNING');
+        setLastRun(null);
+        message.loading({ content: `节点执行中（run #${runId}）…`, key: 'flow-run', duration: 0 });
+        pollRun(runId, token);
+        return { ok: true };
+      } catch (e) {
+        setRunning(false);
+        setMiddleRunning(false);
+        return { ok: false, message: (e as Error).message || '节点执行失败' };
+      }
+    },
+    [flow, running, whenDraftsResolved, stopPolling, message, setRunStatus, pollRun],
+  );
+
   const retryNode = useCallback(
     async (nodeId: string) => {
       if (!flow || running) return;
+      if (!(await whenDraftsResolved())) return;
       setRunning(true);
       setMiddleRunning(false);
       stopPolling();
@@ -341,7 +393,7 @@ export default function FlowEditorPage() {
         message.error({ content: (e as Error).message || '节点重试失败', key: 'flow-run', duration: 5 });
       }
     },
-    [flow, running, stopPolling, message, setRunStatus, pollRun],
+    [flow, running, stopPolling, message, setRunStatus, pollRun, whenDraftsResolved],
   );
 
   useEffect(() => () => stopPolling(), [stopPolling]);
@@ -376,12 +428,15 @@ export default function FlowEditorPage() {
 
   const runFlow = async () => {
     if (!flow || running) return;
-    if (!nodes.length) {
+    if (!(await whenDraftsResolved())) return;
+    const currentNodes = useFlowStore.getState().nodes;
+    if (!currentNodes.length) {
       message.warning('画布为空，请先拖入数据表或添加节点');
       return;
     }
-    if (warnings.length) {
-      message.warning(`配置待检查：${warnings[0]}${warnings.length > 1 ? ` 等 ${warnings.length} 项` : ''}`);
+    const currentWarnings = dagWarnings(currentNodes, useFlowStore.getState().edges);
+    if (currentWarnings.length) {
+      message.warning(`配置待检查：${currentWarnings[0]}${currentWarnings.length > 1 ? ` 等 ${currentWarnings.length} 项` : ''}`);
       return;
     }
     setRunning(true);
@@ -411,12 +466,15 @@ export default function FlowEditorPage() {
   /** 中间任务：不重新同步 src 表，只重跑其余节点。 */
   const runMiddle = async () => {
     if (!flow || running) return;
-    if (!nodes.length) {
+    if (!(await whenDraftsResolved())) return;
+    const currentNodes = useFlowStore.getState().nodes;
+    if (!currentNodes.length) {
       message.warning('画布为空，请先拖入数据表或添加节点');
       return;
     }
-    if (warnings.length) {
-      message.warning(`配置待检查：${warnings[0]}${warnings.length > 1 ? ` 等 ${warnings.length} 项` : ''}`);
+    const currentWarnings = dagWarnings(currentNodes, useFlowStore.getState().edges);
+    if (currentWarnings.length) {
+      message.warning(`配置待检查：${currentWarnings[0]}${currentWarnings.length > 1 ? ` 等 ${currentWarnings.length} 项` : ''}`);
       return;
     }
     setRunning(true);
@@ -450,6 +508,7 @@ export default function FlowEditorPage() {
         icon: <SaveOutlined />,
         label: '手动保存',
         onClick: async () => {
+          if (!(await whenDraftsResolved())) return;
           await save(true);
           message.success('已保存');
         },
@@ -458,7 +517,10 @@ export default function FlowEditorPage() {
         key: 'reload',
         icon: <ReloadOutlined />,
         label: '重新加载画布',
-        onClick: () => flowId && load(flowId),
+        onClick: async () => {
+          if (!(await whenDraftsResolved())) return;
+          if (flowId) load(flowId);
+        },
       },
       {
         key: 'copy',
@@ -466,6 +528,7 @@ export default function FlowEditorPage() {
         label: '复制任务',
         onClick: async () => {
           if (!flow) return;
+          if (!(await whenDraftsResolved())) return;
           try {
             const copy = await duplicateFlow(flow.id);
             message.success('任务已复制');
@@ -542,7 +605,14 @@ export default function FlowEditorPage() {
     <div className="editor-shell">
       <div className="editor-topbar">
         <Tooltip title="返回任务列表">
-          <Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate('/flow')} />
+          <Button
+            type="text"
+            icon={<ArrowLeftOutlined />}
+            onClick={async () => {
+              if (!(await whenDraftsResolved())) return;
+              navigate('/flow');
+            }}
+          />
         </Tooltip>
         <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>任务管理 /</span>
         <Tooltip title={flow.description || '点击铅笔编辑任务名称与描述'}>
@@ -571,6 +641,13 @@ export default function FlowEditorPage() {
           >
             <span className="chip chip--warning">
               <WarningFilled /> {warnings.length} 项待检查
+            </span>
+          </Tooltip>
+        ) : null}
+        {dirtyDraftCount ? (
+          <Tooltip title="节点配置草稿尚未写入流程；点击节点后在面板底部保存">
+            <span className="chip chip--warning">
+              <EditOutlined /> {dirtyDraftCount} 个节点配置未保存
             </span>
           </Tooltip>
         ) : null}
@@ -624,7 +701,13 @@ export default function FlowEditorPage() {
             运行中间任务
           </Button>
         </Tooltip>
-        <Button icon={<HistoryOutlined />} onClick={() => navigate(`/logs?flowId=${flow.id}`)}>
+        <Button
+          icon={<HistoryOutlined />}
+          onClick={async () => {
+            if (!(await whenDraftsResolved())) return;
+            navigate(`/logs?flowId=${flow.id}`);
+          }}
+        >
           执行历史
         </Button>
         <Dropdown menu={moreMenu} trigger={['click']}>
@@ -694,7 +777,7 @@ export default function FlowEditorPage() {
           />
         )}
         <div className="canvas-area">
-          <Canvas flowId={flow.id} nodes={nodes} edges={edges} fitSignal={fitSignal} />
+          <Canvas flowId={flow.id} nodes={displayNodes} edges={edges} fitSignal={fitSignal} />
           <ConfigDrawer
             nodes={nodes}
             edges={edges}
@@ -702,13 +785,15 @@ export default function FlowEditorPage() {
             dataSources={dataSources}
             lastRun={lastRun}
             onRetryNode={retryNode}
+            onRunNode={runSingleNode}
           />
         </div>
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 18px', borderTop: '1px solid var(--border)', background: 'var(--bg-elevated)', fontSize: 11, color: 'var(--text-tertiary)' }}>
         <CheckCircleFilled style={{ color: 'var(--success)' }} />
-        节点 {nodes.length} · 连线 {edges.length} · 变更自动保存（2s 防抖）
+        节点 {displayNodes.length} · 连线 {edges.length} · 画布改动自动保存；节点配置需手动保存
+        {dirtyDraftCount ? ` · ${dirtyDraftCount} 个节点配置未保存` : ''}
         <span style={{ marginLeft: 'auto' }}>执行在 Doris 内完成 · Sink 按目标配置写入</span>
       </div>
 

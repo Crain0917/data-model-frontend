@@ -1,6 +1,6 @@
 import type { CalculatorRow, FieldDef, FlowEdge, FlowNode, FlowNodeKind } from '../types';
 import { isCalcRowComplete } from './calcOps';
-import { findUpstream, isNumericType, outputFields } from './dagUtils';
+import { findUpstream, isNumericType, isStringType, outputFields } from './dagUtils';
 
 const SINGLE_INPUT: FlowNodeKind[] = [
   'filter',
@@ -15,6 +15,8 @@ const SINGLE_INPUT: FlowNodeKind[] = [
   'uniqueRows',
   'columnsToRows',
   'rowsToColumns',
+  'replaceInString',
+  'llm',
   'groupBy',
   'sink',
 ];
@@ -36,6 +38,8 @@ const KIND_LABEL: Partial<Record<FlowNodeKind, string>> = {
   uniqueRows: '行去重',
   columnsToRows: '列转行',
   rowsToColumns: '行转列',
+  replaceInString: '替换字符串',
+  llm: '大模型',
   groupBy: 'Group By',
   join: 'Join',
   union: 'Union',
@@ -488,10 +492,11 @@ function uniqueRowsIssues(
   if (missingKeys.length) issues.push(`关键字段不存在：${missingKeys.join('、')}`);
   const mode = String(cfg.mode || 'SIMPLE').toUpperCase();
   if (mode === 'RULE') {
-    const orderBy = ((cfg.orderBy || []) as Array<Record<string, any>>).filter((k) =>
-      String(k.field || '').trim(),
-    );
+    const rows = ((cfg.orderBy || []) as Array<Record<string, any>>);
+    const orderBy = rows.filter((k) => String(k.field || '').trim());
     if (!orderBy.length) issues.push('按规则去重至少需要 1 个排序字段');
+    const emptyRows = rows.length - orderBy.length;
+    if (emptyRows > 0) issues.push(`有 ${emptyRows} 个排序字段未选择，请选择字段后再保存/预览`);
     const missingOrder = [...new Set(
       orderBy.filter((k) => !fieldOf(upFields, String(k.field))).map((k) => String(k.field)),
     )];
@@ -526,14 +531,16 @@ function columnsToRowsIssues(
   )];
   if (missingValues.length) issues.push(`值字段不存在：${missingValues.join('、')}`);
 
-  const nameOutput = String(cfg.nameOutput || '').trim() || 'field_name';
-  const valueOutput = String(cfg.valueOutput || '').trim() || 'field_value';
-  if (nameOutput.toLowerCase() === valueOutput.toLowerCase()) {
+  const nameOutput = String(cfg.nameOutput ?? '').trim();
+  const valueOutput = String(cfg.valueOutput ?? '').trim();
+  if (!nameOutput) issues.push('名称列名不能为空');
+  if (!valueOutput) issues.push('值列名不能为空');
+  if (nameOutput && valueOutput && nameOutput.toLowerCase() === valueOutput.toLowerCase()) {
     issues.push('名称列与值列不能同名');
   }
   const keepNames = new Set(keepFields.map((k) => k.toLowerCase()));
-  if (keepNames.has(nameOutput.toLowerCase())) issues.push(`名称列与保留字段重名：${nameOutput}`);
-  if (keepNames.has(valueOutput.toLowerCase())) issues.push(`值列与保留字段重名：${valueOutput}`);
+  if (nameOutput && keepNames.has(nameOutput.toLowerCase())) issues.push(`名称列与保留字段重名：${nameOutput}`);
+  if (valueOutput && keepNames.has(valueOutput.toLowerCase())) issues.push(`值列与保留字段重名：${valueOutput}`);
 
   const valueType = String(cfg.valueType || 'STRING').toUpperCase();
   if (!['STRING', 'DOUBLE', 'BIGINT'].includes(valueType)) {
@@ -604,6 +611,148 @@ function rowsToColumnsIssues(
   return issues;
 }
 
+function replaceInStringIssues(
+  cfg: Record<string, any>,
+  node: FlowNode,
+  nodes: FlowNode[],
+  edges: FlowEdge[],
+): string[] {
+  const issues: string[] = [];
+  const upFields = upstreamFieldsOf(node, nodes, edges);
+  const field = String(cfg.field || '').trim();
+  const column = fieldOf(upFields, field);
+  if (!field) issues.push('未选择输入字段');
+  else if (!column) issues.push(`字段不存在：${field}`);
+  else if (!isStringType(column.type)) issues.push(`输入字段必须是字符串类型：${field}`);
+  if (!String(cfg.search ?? '').length) issues.push('查找内容不能为空');
+  if (cfg.useRegex && String(cfg.search ?? '').length) {
+    try {
+      new RegExp(String(cfg.search));
+    } catch (e) {
+      issues.push(`正则表达式无效：${(e as Error).message}`);
+    }
+  }
+  const output = String(cfg.output || '').trim();
+  if (output && field && output.toLowerCase() !== field.toLowerCase()) {
+    const upNames = new Set(upFields.map((f) => f.name.toLowerCase()));
+    if (upNames.has(output.toLowerCase())) issues.push(`输出字段与上游重名：${output}`);
+  }
+  return issues;
+}
+
+function llmIssues(
+  cfg: Record<string, any>,
+  node: FlowNode,
+  nodes: FlowNode[],
+  edges: FlowEdge[],
+): string[] {
+  const issues: string[] = [];
+  const upFields = upstreamFieldsOf(node, nodes, edges);
+  const inputFields = ((cfg.inputFields || []) as unknown[])
+    .map((v) => String(v ?? '').trim())
+    .filter(Boolean);
+  if (!inputFields.length) issues.push('至少选择 1 个输入字段');
+  const missingInputs = [...new Set(inputFields.filter((f) => !fieldOf(upFields, f)))];
+  if (missingInputs.length) issues.push(`输入字段不存在：${missingInputs.join('、')}`);
+
+  // 字段 → 变量名映射；旧配置没有 inputVariables 时变量名默认取字段名。
+  const rawVars = ((cfg.inputVariables || []) as Array<Record<string, any>>).map((v) => ({
+    field: String(v?.field ?? '').trim(),
+    variable: String(v?.variable ?? '').trim(),
+  }));
+  const variableByField = new Map<string, string>();
+  for (const field of inputFields) {
+    const hit = rawVars.find((v) => v.field === field);
+    variableByField.set(field, hit?.variable || field);
+  }
+  const usedVars = new Map<string, string>();
+  const invalidVars: string[] = [];
+  const dupVars: string[] = [];
+  const reservedVars: string[] = [];
+  for (const field of inputFields) {
+    const variable = variableByField.get(field) || '';
+    if (!variable) {
+      invalidVars.push(`${field}（变量名为空）`);
+      continue;
+    }
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(variable)) {
+      invalidVars.push(`${field}（${variable}）`);
+      continue;
+    }
+    if (['enum_list', 'fallback', 'input_text'].includes(variable)) {
+      reservedVars.push(variable);
+      continue;
+    }
+    const key = variable.toLowerCase();
+    if (usedVars.has(key)) dupVars.push(variable);
+    else usedVars.set(key, field);
+  }
+  if (invalidVars.length) {
+    issues.push(`变量名需以字母/下划线开头且只含字母、数字、下划线：${invalidVars.join('、')}`);
+  }
+  if (dupVars.length) issues.push(`变量名重复：${[...new Set(dupVars)].join('、')}`);
+  if (reservedVars.length) {
+    issues.push(`变量名不能使用保留名：${[...new Set(reservedVars)].join('、')}`);
+  }
+
+  const enumValues = ((cfg.enumValues || []) as unknown[])
+    .map((v) => String(v ?? '').trim())
+    .filter(Boolean);
+  if (!enumValues.length) issues.push('至少填写 1 个标准输出枚举值');
+
+  if (!String(cfg.unknownValue || '').trim()) {
+    issues.push('未知/兜底值（unknownValue）不能为空');
+  }
+
+  const outputField = String(cfg.outputField || '').trim();
+  if (!outputField) issues.push('输出字段名不能为空');
+  else if (upFields.some((f) => f.name.toLowerCase() === outputField.toLowerCase())) {
+    issues.push(`输出字段与上游已有列重名：${outputField}`);
+  }
+
+  if (!String(cfg.endpoint || '').trim()) issues.push('模型 endpoint 不能为空');
+  if (!String(cfg.model || '').trim()) issues.push('模型 model 不能为空');
+
+  const batchRows = Number(cfg.batchRows);
+  if (!Number.isInteger(batchRows) || batchRows < 1 || batchRows > 200) {
+    issues.push('批大小必须是 1~200 的整数');
+  }
+
+  const template = String(cfg.promptTemplate || '');
+  const hasBatchToken = template.includes('${input_text}');
+  const hasFieldVar = [...usedVars.keys()].some((v) =>
+    template.toLowerCase().includes(`\${${v}}`),
+  );
+  if (!hasBatchToken && !hasFieldVar) {
+    issues.push('Prompt 模板必须包含 ${input_text}（批量）或至少一个字段变量（逐行）');
+  }
+  return issues;
+}
+
+/** 硬性阻断：不满足时禁用「保存配置」与预览。 */
+export function blockingIssues(node: FlowNode, nodes: FlowNode[], edges: FlowEdge[]): string[] {
+  const cfg = node.data.config as Record<string, any>;
+  switch (node.data.kind) {
+    case 'columnsToRows':
+      return columnsToRowsIssues(cfg, node, nodes, edges).filter(
+        (i) => i === '名称列名不能为空' || i === '值列名不能为空',
+      );
+    case 'uniqueRows': {
+      if (String(cfg.mode || 'SIMPLE').toUpperCase() !== 'RULE') return [];
+      const rows = ((cfg.orderBy || []) as Array<Record<string, any>>);
+      return rows.some((r) => !String(r.field || '').trim())
+        ? ['有排序字段未选择，请选择字段后再保存/预览']
+        : [];
+    }
+    case 'replaceInString':
+      return replaceInStringIssues(cfg, node, nodes, edges);
+    case 'llm':
+      return llmIssues(cfg, node, nodes, edges);
+    default:
+      return [];
+  }
+}
+
 export function dagWarnings(nodes: FlowNode[], edges: FlowEdge[]): string[] {
   const warnings: string[] = [];
   for (const node of nodes) {
@@ -671,6 +820,16 @@ export function dagWarnings(nodes: FlowNode[], edges: FlowEdge[]): string[] {
     }
     if (node.data.kind === 'rowsToColumns') {
       for (const issue of rowsToColumnsIssues(cfg, node, nodes, edges)) {
+        warnings.push(`节点「${node.data.label}」${issue}`);
+      }
+    }
+    if (node.data.kind === 'replaceInString') {
+      for (const issue of replaceInStringIssues(cfg, node, nodes, edges)) {
+        warnings.push(`节点「${node.data.label}」${issue}`);
+      }
+    }
+    if (node.data.kind === 'llm') {
+      for (const issue of llmIssues(cfg, node, nodes, edges)) {
         warnings.push(`节点「${node.data.label}」${issue}`);
       }
     }
@@ -746,6 +905,14 @@ export function nodeWarning(node: FlowNode, nodes: FlowNode[], edges: FlowEdge[]
     }
     case 'rowsToColumns': {
       const issues = rowsToColumnsIssues(cfg, node, nodes, edges);
+      return issues.length ? issues[0] : null;
+    }
+    case 'replaceInString': {
+      const issues = replaceInStringIssues(cfg, node, nodes, edges);
+      return issues.length ? issues[0] : null;
+    }
+    case 'llm': {
+      const issues = llmIssues(cfg, node, nodes, edges);
       return issues.length ? issues[0] : null;
     }
     case 'groupBy':

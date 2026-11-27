@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Alert, Button, Collapse, Modal, Space, Spin, Table, Tag } from 'antd';
 import { CloudServerOutlined, DatabaseOutlined, ReloadOutlined } from '@ant-design/icons';
-import type { ColumnInfo, NodeDataPreview } from '../types';
+import type { ColumnInfo, FlowNode, NodeDataPreview } from '../types';
 import { previewNodeData } from '../api/flow';
 import { ApiError } from '../api/http';
 
@@ -13,17 +13,28 @@ interface PreviewModalProps {
   nodeId?: string;
   dagJson?: unknown;
   fallbackColumns?: ColumnInfo[];
+  /** 单次预览最多读取的行数，默认 100；大模型节点为 20。 */
+  limit?: number;
+  /** 附加说明，例如大模型预览会真实调用模型。 */
+  notice?: string;
+  /** 用于把 4091 返回的 nodeId 显示成节点名称。 */
+  nodes?: FlowNode[];
+  /** 4091 时一键选中出问题的上游节点。 */
+  onLocateNode?: (nodeId: string) => void;
 }
 
 interface PreviewError {
   code: number;
   message: string;
+  nodeId?: string | null;
+  reason?: string | null;
 }
 
 const SOURCE_LABEL: Record<string, { text: string; color: string; icon: ReactNode }> = {
   SOURCE_DB: { text: '源库（过滤条件下推）', color: 'blue', icon: <DatabaseOutlined /> },
   DORIS: { text: 'Doris 物化表', color: 'green', icon: <CloudServerOutlined /> },
   MOCK: { text: 'Mock 演示数据', color: 'orange', icon: <CloudServerOutlined /> },
+  LLM: { text: '大模型调用结果', color: 'purple', icon: <CloudServerOutlined /> },
 };
 
 function cellText(value: unknown) {
@@ -40,6 +51,10 @@ export default function PreviewModal({
   nodeId,
   dagJson,
   fallbackColumns = [],
+  limit = 100,
+  notice,
+  nodes = [],
+  onLocateNode,
 }: PreviewModalProps) {
   const [data, setData] = useState<NodeDataPreview | null>(null);
   const [error, setError] = useState<PreviewError | null>(null);
@@ -54,16 +69,19 @@ export default function PreviewModal({
     setLoading(true);
     setError(null);
     setData(null);
-    previewNodeData(flowId, nodeId, dagJson, 100)
+    previewNodeData(flowId, nodeId, dagJson, limit)
       .then((res) => {
         if (alive) setData(res);
       })
       .catch((e) => {
         if (!alive) return;
         const apiError = e as ApiError;
+        const detail = (apiError.data || null) as Record<string, unknown> | null;
         setError({
           code: typeof apiError.code === 'number' ? apiError.code : -1,
           message: apiError.message || '数据预览失败',
+          nodeId: detail && detail.nodeId != null ? String(detail.nodeId) : null,
+          reason: detail && detail.reason != null ? String(detail.reason) : null,
         });
       })
       .finally(() => {
@@ -72,7 +90,7 @@ export default function PreviewModal({
     return () => {
       alive = false;
     };
-  }, [open, nodeId, flowId, dagJson, token]);
+  }, [open, nodeId, flowId, dagJson, token, limit]);
 
   const columns = data?.columns?.length ? data.columns : fallbackColumns;
   const records = (data?.rows || []).map((row, index) => {
@@ -125,17 +143,41 @@ export default function PreviewModal({
         </div>
       ) : error ? (
         error.code === 4091 ? (
-          <Alert
-            type="warning"
-            showIcon
-            message="节点尚未物化，请先执行任务"
-            description="该节点还没有 Doris 物化表；执行一次任务（或先跑该节点）后再预览。"
-            action={
-              <Button size="small" onClick={load}>
-                重试
-              </Button>
-            }
-          />
+          (() => {
+            const targetNode = error.nodeId ? nodes.find((n) => n.id === error.nodeId) : undefined;
+            const targetLabel = targetNode?.data.label || error.nodeId || '';
+            const upstream = error.reason === 'UPSTREAM_NOT_MATERIALIZED';
+            return (
+              <Alert
+                type="warning"
+                showIcon
+                message={
+                  targetLabel
+                    ? upstream
+                      ? `上游节点「${targetLabel}」尚未执行，请先执行该节点`
+                      : `节点「${targetLabel}」尚未执行，请先执行该节点`
+                    : '节点尚未物化，请先执行任务'
+                }
+                description={
+                  targetLabel
+                    ? `该节点还没有 Doris 物化表（节点 ID：${error.nodeId}）；执行一次任务（或先跑该节点）后再预览。`
+                    : '该节点还没有 Doris 物化表；执行一次任务（或先跑该节点）后再预览。'
+                }
+                action={
+                  <Space direction="vertical" size={6}>
+                    {error.nodeId && onLocateNode ? (
+                      <Button size="small" type="primary" onClick={() => onLocateNode(error.nodeId!)}>
+                        定位节点
+                      </Button>
+                    ) : null}
+                    <Button size="small" onClick={load}>
+                      重试
+                    </Button>
+                  </Space>
+                }
+              />
+            );
+          })()
         ) : (
           <Alert
             type="error"
@@ -151,6 +193,15 @@ export default function PreviewModal({
         )
       ) : (
         <>
+          {notice ? (
+            <Alert
+              type="info"
+              showIcon
+              banner
+              style={{ marginBottom: 10, fontSize: 12 }}
+              message={notice}
+            />
+          ) : null}
           <div
             style={{
               display: 'flex',
@@ -173,8 +224,15 @@ export default function PreviewModal({
                 {data.sink.writeMode === 'OVERWRITE' ? ' · 覆盖' : ' · 追加'}
               </Tag>
             ) : null}
+            {data?.source === 'LLM' &&
+            data.llm &&
+            (typeof data.llm.calls === 'number' || typeof data.llm.batches === 'number') ? (
+              <Tag color="purple" style={{ margin: 0 }}>
+                模型调用 {data.llm.calls ?? '—'} 次 · {data.llm.batches ?? '—'} 批
+              </Tag>
+            ) : null}
             <span>
-              返回 {data?.rows?.length || 0} 行 · 最多 200 行
+              返回 {data?.rows?.length || 0} 行 · 最多 {limit} 行
               {data?.truncated ? '（结果已截断）' : ''}
             </span>
             {data?.params?.length ? <span>参数 {data.params.length} 个</span> : null}

@@ -371,6 +371,73 @@ export async function listRuns(flowId?: string): Promise<FlowRun[]> {
   return all.sort((a, b) => b.startTime.localeCompare(a.startTime));
 }
 
+export interface LlmKeyStatus {
+  configured: boolean;
+  /** 后端返回的掩码（如 sk-****abcd），不会返回明文。 */
+  maskedKey: string | null;
+  endpoint: string | null;
+  model: string | null;
+}
+
+function mapLlmKey(raw: unknown): LlmKeyStatus {
+  const data = (raw || {}) as Record<string, unknown>;
+  const masked = data.maskedKey ?? data.mask ?? data.apiKeyMask ?? null;
+  return {
+    configured: Boolean(data.configured ?? data.hasKey ?? masked),
+    maskedKey: masked == null ? null : String(masked),
+    endpoint: data.endpoint == null ? null : String(data.endpoint),
+    model: data.model == null ? null : String(data.model),
+  };
+}
+
+/** 契约 Plan A：大模型节点 API Key 只走独立接口，不进入 dag_json。 */
+export async function getLlmKey(flowId: string, nodeId: string): Promise<LlmKeyStatus> {
+  if (USE_MOCK) return { configured: false, maskedKey: null, endpoint: null, model: null };
+  return mapLlmKey(await http.get(`/flow/${flowId}/node/${nodeId}/llm-key`));
+}
+
+export async function putLlmKey(
+  flowId: string,
+  nodeId: string,
+  payload: { apiKey: string; endpoint?: string; model?: string },
+): Promise<LlmKeyStatus> {
+  if (USE_MOCK) return { configured: true, maskedKey: 'mock-****', endpoint: null, model: null };
+  return mapLlmKey(await http.put(`/flow/${flowId}/node/${nodeId}/llm-key`, payload));
+}
+
+export async function deleteLlmKey(flowId: string, nodeId: string): Promise<void> {
+  if (USE_MOCK) return;
+  await http.delete(`/flow/${flowId}/node/${nodeId}/llm-key`);
+}
+
+/**
+ * 拉取模型列表（需求-2026-11-26 §5.2）：GET .../llm-models?endpoint=...
+ * 返回去重排序后的模型名；接口未就绪时由面板降级为手工输入。
+ */
+export async function listLlmModels(
+  flowId: string,
+  nodeId: string,
+  endpoint: string,
+): Promise<string[]> {
+  if (USE_MOCK) return [];
+  const raw = (await http.get(`/flow/${flowId}/node/${nodeId}/llm-models`, {
+    params: { endpoint },
+  })) as unknown;
+  const list = Array.isArray(raw)
+    ? raw
+    : Array.isArray((raw as Record<string, unknown>)?.models)
+      ? ((raw as Record<string, unknown>).models as unknown[])
+      : [];
+  const names = list
+    .map((item) => {
+      if (typeof item === 'string') return item.trim();
+      const obj = (item || {}) as Record<string, unknown>;
+      return String(obj.id ?? obj.name ?? obj.model ?? '').trim();
+    })
+    .filter(Boolean);
+  return [...new Set(names)].sort((a, b) => a.localeCompare(b));
+}
+
 export async function getNodeLogs(runId: string, nodeId: string): Promise<NodeLogs> {
   if (USE_MOCK) return flowMock.nodeLogs(runId, nodeId);
   return (await http.get(

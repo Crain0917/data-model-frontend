@@ -44,6 +44,8 @@ const NODE_TYPE: Record<string, string> = {
   uniqueRows: 'unique_rows',
   columnsToRows: 'columns_to_rows',
   rowsToColumns: 'rows_to_columns',
+  replaceInString: 'replace_in_string',
+  llm: 'llm',
   groupBy: 'groupby',
   join: 'join',
   union: 'union',
@@ -306,10 +308,53 @@ function toConfig(node: FlowNode, edges: FlowEdge[]): Json {
             label: v.label == null ? '' : String(v.label),
           }))
           .filter((v) => v.field),
-        nameOutput: String(cfg.nameOutput ?? '').trim() || 'field_name',
-        valueOutput: String(cfg.valueOutput ?? '').trim() || 'field_value',
+        nameOutput: String(cfg.nameOutput ?? '').trim(),
+        valueOutput: String(cfg.valueOutput ?? '').trim(),
         valueType,
         skipNull: Boolean(cfg.skipNull),
+      };
+    }
+    case 'replaceInString':
+      return {
+        alias: cfg.alias ?? 'a',
+        field: String(cfg.field ?? '').trim(),
+        output: String(cfg.output ?? '').trim(),
+        search: String(cfg.search ?? ''),
+        replacement: String(cfg.replacement ?? ''),
+        useRegex: Boolean(cfg.useRegex),
+      };
+    case 'llm': {
+      const num = (value: unknown, fallback: number) => {
+        const n = Number(value);
+        return Number.isFinite(n) ? n : fallback;
+      };
+      const inputFields = ((cfg.inputFields as unknown[]) || [])
+        .map((v) => String(v ?? '').trim())
+        .filter(Boolean);
+      // 旧配置无 inputVariables 时按字段名补变量名；新配置保持用户映射。
+      const rawVars = ((cfg.inputVariables as Json[]) || []).map((v) => ({
+        field: String(v.field ?? '').trim(),
+        variable: String(v.variable ?? '').trim(),
+      }));
+      const inputVariables = inputFields.map((field) => {
+        const hit = rawVars.find((v) => v.field === field);
+        return { field, variable: hit?.variable || field };
+      });
+      return {
+        alias: cfg.alias ?? 'a',
+        inputFields,
+        inputVariables,
+        outputField: String(cfg.outputField ?? '').trim(),
+        enumValues: ((cfg.enumValues as unknown[]) || [])
+          .map((v) => String(v ?? '').trim())
+          .filter(Boolean),
+        batchRows: num(cfg.batchRows, 20),
+        endpoint: String(cfg.endpoint ?? '').trim(),
+        model: String(cfg.model ?? '').trim(),
+        promptTemplate: String(cfg.promptTemplate ?? ''),
+        unknownValue: String(cfg.unknownValue ?? '').trim() || '未知',
+        timeoutSeconds: num(cfg.timeoutSeconds, 60),
+        maxRetries: num(cfg.maxRetries, 2),
       };
     }
     case 'rowsToColumns': {
@@ -462,6 +507,8 @@ const KIND_BY_TYPE: Record<string, FlowNodeKind> = {
   unique_rows: 'uniqueRows',
   columns_to_rows: 'columnsToRows',
   rows_to_columns: 'rowsToColumns',
+  replace_in_string: 'replaceInString',
+  llm: 'llm',
   groupby: 'groupBy',
   groupBy: 'groupBy',
   join: 'join',
@@ -705,10 +752,55 @@ function reverseConfig(kind: FlowNodeKind, raw: Json, nodeId: string, edges: Flo
             label: v.label == null ? '' : String(v.label),
           }))
           .filter((v) => v.field),
-        nameOutput: String(raw.nameOutput ?? '').trim() || 'field_name',
-        valueOutput: String(raw.valueOutput ?? '').trim() || 'field_value',
+        nameOutput: String(raw.nameOutput ?? '').trim(),
+        valueOutput: String(raw.valueOutput ?? '').trim(),
         valueType,
         skipNull: Boolean(raw.skipNull),
+      };
+    }
+    case 'replaceInString':
+      return {
+        alias: raw.alias ?? 'a',
+        field: String(raw.field ?? '').trim(),
+        output: String(raw.output ?? '').trim(),
+        search: String(raw.search ?? ''),
+        replacement: String(raw.replacement ?? ''),
+        useRegex: Boolean(raw.useRegex),
+      };
+    case 'llm': {
+      const num = (value: unknown, fallback: number) => {
+        const n = Number(value);
+        return Number.isFinite(n) ? n : fallback;
+      };
+      const inputFields = ((raw.inputFields as unknown[] | undefined) || [])
+        .map((v) => String(v ?? '').trim())
+        .filter(Boolean);
+      // 旧 dag_json 没有 inputVariables：变量名回落为字段名，后端解析照旧可用。
+      const rawVars = ((raw.inputVariables as Json[] | undefined) || []).map((v) => ({
+        field: String(v.field ?? '').trim(),
+        variable: String(v.variable ?? '').trim(),
+      }));
+      const inputVariables = inputFields.map((field) => {
+        const hit = rawVars.find(
+          (v) => v.field === field || v.field.toLowerCase() === field.toLowerCase(),
+        );
+        return { field, variable: hit?.variable || field };
+      });
+      return {
+        alias: raw.alias ?? 'a',
+        inputFields,
+        inputVariables,
+        outputField: String(raw.outputField ?? '').trim(),
+        enumValues: ((raw.enumValues as unknown[] | undefined) || [])
+          .map((v) => String(v ?? '').trim())
+          .filter(Boolean),
+        batchRows: num(raw.batchRows, 20),
+        endpoint: String(raw.endpoint ?? '').trim(),
+        model: String(raw.model ?? '').trim(),
+        promptTemplate: String(raw.promptTemplate ?? ''),
+        unknownValue: String(raw.unknownValue ?? '').trim() || '未知',
+        timeoutSeconds: num(raw.timeoutSeconds, 60),
+        maxRetries: num(raw.maxRetries, 2),
       };
     }
     case 'rowsToColumns': {

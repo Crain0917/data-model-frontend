@@ -362,7 +362,7 @@ export default function SinkPanel(props: PanelProps) {
             )
           }
         >
-          ① 目标
+          目标
         </SectionTitle>
 
         <div className="form-hint" style={{ marginBottom: 4 }}>目标类型</div>
@@ -548,7 +548,7 @@ export default function SinkPanel(props: PanelProps) {
       </div>
 
       <div className="form-section">
-        <SectionTitle>② 写入方式</SectionTitle>
+        <SectionTitle>写入方式</SectionTitle>
         <div className="form-hint" style={{ marginBottom: 4 }}>写入模式</div>
         <Radio.Group
           value={cfg.writeMode}
@@ -623,7 +623,7 @@ export default function SinkPanel(props: PanelProps) {
             </Button>
           }
         >
-          ③ 字段映射
+          字段映射
         </SectionTitle>
 
         {!upstreamNames.length ? (
@@ -680,7 +680,7 @@ export default function SinkPanel(props: PanelProps) {
       </div>
 
       <div className="form-section">
-        <SectionTitle>④ 水位线（可选）</SectionTitle>
+        <SectionTitle>水位线（可选）</SectionTitle>
         <Select
           allowClear
           showSearch
@@ -714,7 +714,7 @@ export default function SinkPanel(props: PanelProps) {
             </Button>
           }
         >
-          ⑤ 预览
+          预览
         </SectionTitle>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <Button

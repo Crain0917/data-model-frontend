@@ -17,6 +17,8 @@ import {
   CopyOutlined,
   ColumnHeightOutlined,
   VerticalAlignBottomOutlined,
+  DiffOutlined,
+  RobotOutlined,
 } from '@ant-design/icons';
 import type { FlowNodeKind } from '../types';
 
@@ -148,6 +150,24 @@ export const NODE_META: Record<FlowNodeKind, NodeMeta> = {
     tint: '#7C3AED',
     icon: <VerticalAlignBottomOutlined />,
   },
+  replaceInString: {
+    kind: 'replaceInString',
+    label: '替换字符串',
+    enLabel: 'REPLACE IN STRING',
+    desc: '字面量或正则替换文本，可原地或新增列',
+    color: '#ECFEFF',
+    tint: '#0E7490',
+    icon: <DiffOutlined />,
+  },
+  llm: {
+    kind: 'llm',
+    label: '大模型',
+    enLabel: 'LLM',
+    desc: '按行调用大模型，输出标准枚举字段',
+    color: '#F3E8FF',
+    tint: '#9333EA',
+    icon: <RobotOutlined />,
+  },
   groupBy: {
     kind: 'groupBy',
     label: 'Group By',
@@ -186,24 +206,43 @@ export const NODE_META: Record<FlowNodeKind, NodeMeta> = {
   },
 };
 
-export const NODE_PALETTE: FlowNodeKind[] = [
-  'filter',
-  'convert',
-  'calculator',
-  'formula',
-  'replaceNull',
-  'sortRows',
-  'splitFields',
-  'splitFieldsToRows',
-  'valueMapper',
-  'uniqueRows',
-  'columnsToRows',
-  'rowsToColumns',
-  'groupBy',
-  'join',
-  'union',
-  'sink',
+export interface PaletteGroup {
+  key: string;
+  label: string;
+  kinds: FlowNodeKind[];
+}
+
+/** 节点库四组固定顺序：第一行「关联聚合 + 数据输出」，见 需求-2026-11-27 §1。 */
+export const NODE_GROUPS: PaletteGroup[] = [
+  { key: 'aggregate', label: '关联聚合', kinds: ['join', 'union', 'groupBy'] },
+  { key: 'output', label: '数据输出', kinds: ['sink'] },
+  {
+    key: 'pivot',
+    label: '行列转换',
+    kinds: ['columnsToRows', 'rowsToColumns', 'splitFields', 'splitFieldsToRows'],
+  },
+  {
+    key: 'field',
+    label: '字段处理',
+    kinds: [
+      'filter',
+      'convert',
+      'calculator',
+      'formula',
+      'replaceNull',
+      'replaceInString',
+      'valueMapper',
+      'uniqueRows',
+      'sortRows',
+      'llm',
+    ],
+  },
 ];
+
+/** 三行布局：第一行关联聚合 + 数据输出，第二行列转换，第三行字段处理。 */
+export const PALETTE_ROWS: string[][] = [['aggregate', 'output'], ['pivot'], ['field']];
+
+export const NODE_PALETTE: FlowNodeKind[] = NODE_GROUPS.flatMap((g) => g.kinds);
 
 export const NODE_COLORS = [
   '#E8F0FE',
@@ -230,6 +269,8 @@ export const DEFAULT_NODE_NAME: Record<FlowNodeKind, string> = {
   uniqueRows: '行去重',
   columnsToRows: '列转行',
   rowsToColumns: '行转列',
+  replaceInString: '替换字符串',
+  llm: '大模型',
   groupBy: 'group_by',
   join: 'join',
   union: 'union',
